@@ -1,0 +1,51 @@
+name: Windows Build (MSVC)
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build on Windows (MSVC x64)
+    runs-on: windows-latest
+
+    steps:
+      # ── 1. Checkout ────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. MSVC x64 environment ────────────────────────────────
+      - name: Set up MSVC (Developer Command Prompt)
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      # ── 3. Cache CMake / FetchContent (ImGui) ──────────────────
+      - name: Cache CMake build directory
+        uses: actions/cache@v4
+        with:
+          path: build
+          key: ${{ runner.os }}-cmake-${{ hashFiles('CMakeLists.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-cmake-
+
+      # ── 4. Configure ───────────────────────────────────────────
+      - name: Configure CMake
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release
+        shell: cmd
+
+      # ── 5. Build ───────────────────────────────────────────────
+      - name: Build
+        run: cmake --build build --config Release --parallel
+        shell: cmd
+
+      # ── 6. Upload .exe artifact ────────────────────────────────
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RasFocus-Release-x64
+          path: build/Release/RasFocus.exe
+          if-no-files-found: warn
