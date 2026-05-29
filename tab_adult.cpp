@@ -1,0 +1,960 @@
+// tab_adult.cpp - ImGui Converted Adult Block + Strict Protocols (v3.0)
+// Converted from GDI+ to Dear ImGui
+// Compatible with: ImGui 1.90+, MSVC / MinGW, Windows 7+
+
+#include "tab_adult.h"
+
+#include "imgui.h"
+#include "imgui_internal.h"  // for ImGui::PushItemFlag etc.
+
+#include <windows.h>
+#include <psapi.h>
+#include <tlhelp32.h>
+#include <uiautomation.h>
+#include <shlobj.h>
+#include <shlwapi.h>
+
+#include <vector>
+#include <string>
+#include <algorithm>
+#include <thread>
+#include <fstream>
+#include <sstream>
+#include <codecvt>
+#include <locale>
+#include <ctime>
+
+using namespace std;
+
+// ─── Premium Feature Gate ─────────────────────────────────────
+bool g_isPremiumUser    = false;
+bool g_showUpgradePopup = false;
+bool g_parentForceAdultBlock = false;
+
+// ─── Color helpers (ImVec4) ───────────────────────────────────
+static const ImVec4 ClrTeal        = {0.047f, 0.659f, 0.690f, 1.00f};
+static const ImVec4 ClrTealHover   = {0.118f, 0.725f, 0.765f, 1.00f};
+static const ImVec4 ClrRed         = {0.863f, 0.235f, 0.196f, 1.00f};
+static const ImVec4 ClrGreen       = {0.133f, 0.627f, 0.314f, 1.00f};
+static const ImVec4 ClrOrange      = {0.941f, 0.549f, 0.118f, 1.00f};
+static const ImVec4 ClrGrayText    = {0.510f, 0.510f, 0.549f, 1.00f};
+static const ImVec4 ClrDark        = {0.137f, 0.137f, 0.176f, 1.00f};
+static const ImVec4 ClrBg          = {0.965f, 0.976f, 0.988f, 1.00f};
+static const ImVec4 ClrCardBg      = {0.988f, 0.996f, 1.000f, 1.00f};
+static const ImVec4 ClrTealLight   = {0.863f, 0.973f, 0.980f, 1.00f};
+static const ImVec4 ClrWhite       = {1.00f,  1.00f,  1.00f,  1.00f};
+
+// ─── Safe Browsing State ──────────────────────────────────────
+static bool isAdultFocusActive  = false;
+static ULONGLONG focusEndTime   = 0;
+
+static int  controlMode         = 0;   // 0=Self, 1=Parents, 2=Long Text
+static int  adultReligion       = 0;   // 0=Muslim 1=Hindu 2=Christian 3=Universal
+static int  adultLanguage       = 0;   // 0=Bangla 1=English
+
+static bool cbAdultWeb   = true;
+static bool cbFbReels    = true;
+static bool cbHardcore   = true;
+static bool cbRomantic   = true;
+
+static bool cbPeriodicPopups     = false;
+static DWORD lastPeriodicPopupTime = 0;
+
+static bool cb24HourLock         = false;
+static ULONGLONG lock24hEndTime  = 0;
+
+static bool isPanicActive        = false;
+static DWORD panicStartTime      = 0;
+static int   totalBlockedAdultCount = 0;
+
+// ─── Strict Protocols State ───────────────────────────────────
+static bool cbSilentUrl   = true;
+static bool cbDnsFilter   = false;
+static bool cbSafeSearch  = true;
+static bool cbIncognito   = true;
+static bool cbStrictMode  = false;
+
+static bool isStrictFocusActive   = false;
+static ULONGLONG strictFocusEndTime = 0;
+
+static bool strictSettingsLoaded = false;
+static bool adultThreadStarted   = false;
+
+// ─── Overlay State ────────────────────────────────────────────
+static bool showTimeOverlay       = false;
+static bool showStrictTimeOverlay = false;
+static bool showPassOverlay       = false;
+static bool showLongTextOverlay   = false;
+
+static int  focusHours = 1, focusMins = 0;
+static int  strictFocusHours = 1, strictFocusMins = 0;
+
+static char inputPassBuf[64]      = {};
+static bool isStoppingFocus       = false;
+
+static char inputLongTextBuf[4096] = {};
+
+// ─── Custom Keywords ──────────────────────────────────────────
+struct AdultCustomItem { wstring name; };
+static vector<AdultCustomItem> customAdultKeywords;
+static char customInputBuf[128] = {};
+
+// ─── Quotes ───────────────────────────────────────────────────
+struct Quote { wstring bn; wstring en; };
+
+static vector<Quote> muslimQuotes = {
+    {L"\u201c\u09ae\u09c1\u09ae\u09bf\u09a8\u09a6\u09c7\u09b0 \u09ac\u09b2\u09c1\u09a8, \u09a4\u09be\u09b0\u09be \u09af\u09c7\u09a8 \u09a4\u09be\u09a6\u09c7\u09b0 \u09a6\u09c3\u09b7\u09cd\u099f\u09bf \u09a8\u09a4 \u09b0\u09be\u0996\u09c7\u0964\u201d - (\u09b8\u09c2\u09b0\u09be \u0986\u09a8-\u09a8\u09c2\u09b0: \u09e9\u09e6)",
+     L"Tell the believing men to reduce their vision and guard their private parts. (Surah An-Nur: 30)"},
+    {L"\u201c\u09b2\u099c\u09cd\u099c\u09be\u09b6\u09c0\u09b2\u09a4\u09be \u0987\u09ae\u09be\u09a8\u09c7\u09b0 \u0985\u0999\u09cd\u0997\u0964\u201d - (\u09b8\u09b9\u09bf\u09b9 \u09ae\u09c1\u09b8\u09b2\u09bf\u09ae)",
+     L"Modesty is a branch of faith. (Sahih Muslim)"},
+};
+static vector<Quote> hinduQuotes = {
+    {L"\u201c\u09af\u09c7 \u09ae\u09a8\u0995\u09c7 \u09a8\u09bf\u09af\u09bc\u09a8\u09cd\u09a4\u09cd\u09b0\u09a3 \u0995\u09b0\u09a4\u09c7 \u09aa\u09be\u09b0\u09c7 \u09a8\u09be, \u09a4\u09be\u09b0 \u09ae\u09a8 \u09a4\u09be\u09b0 \u09b8\u09ac\u099a\u09c7\u09df\u09c7 \u09ac\u09dc \u09b6\u09a4\u09cd\u09b0\u09c1\u0964\u201d - (\u09ad\u0997\u09ac\u09a6\u09cd\u0997\u09c0\u09a4\u09be)",
+     L"For him who has not conquered the mind, the mind is the greatest enemy. (Bhagavad Gita)"},
+};
+static vector<Quote> christianQuotes = {
+    {L"\u201c\u09af\u09c7 \u0995\u09c7\u0989 \u0995\u09cb\u09a8\u09cb \u09b8\u09cd\u09a4\u09cd\u09b0\u09c0\u09b0 \u09a6\u09bf\u0995\u09c7 \u0995\u09be\u09ae\u09a8\u09be\u09b0 \u09a6\u09c3\u09b7\u09cd\u099f\u09bf\u09a4\u09c7 \u09a4\u09be\u0995\u09be\u09df\u2026\u201d - (\u09ae\u09a5\u09bf \u09eb:\u09e8\u09ee)",
+     L"Anyone who looks at a woman lustfully has already committed adultery in his heart. (Matthew 5:28)"},
+};
+static vector<Quote> universalQuotes = {
+    {L"\u201c\u09b8\u09ab\u09b2\u09a4\u09be \u0986\u09b8\u09c7 \u09ab\u09cb\u0995\u09be\u09b8 \u09a5\u09c7\u0995\u09c7, \u09a1\u09bf\u09b8\u09cd\u099f\u09cd\u09b0\u09be\u0995\u09b6\u09a8 \u09a5\u09c5\u0995\u09c7 \u09a8\u09df\u0964\u201d",
+     L"Success comes from focus, not from distraction."},
+    {L"\u201c\u09af\u09c7 \u09a8\u09bf\u099c\u09c7\u09b0 \u09ae\u09a8\u0995\u09c7 \u09a8\u09bf\u09af\u09bc\u09a8\u09cd\u09a4\u09cd\u09b0\u09a3 \u0995\u09b0\u09a4\u09c7 \u09aa\u09be\u09b0\u09c7, \u09b8\u09c7 \u09aa\u09c3\u09a5\u09bf\u09ac\u09c0 \u099c\u09df \u0995\u09b0\u09a4\u09c7 \u09aa\u09be\u09b0\u09c7\u0964\u201d",
+     L"He who can control his mind can conquer the world."},
+};
+
+// ─── Keywords ─────────────────────────────────────────────────
+static vector<wstring> hardcoreKeywords = {
+    L"porn", L"xxx", L"sex", L"nude", L"nsfw", L"hentai", L"milf", L"blowjob",
+    L"xvideos", L"pornhub", L"xnxx", L"xhamster", L"brazzers", L"onlyfans",
+    L"chaturbate", L"spankbang", L"redtube", L"youporn",
+    L"\u099a\u099f\u09bf", L"\u09aa\u09b0\u09cd\u09a3", L"\u09b8\u09c7\u0995\u09cd\u09b8", L"\u09a8\u0997\u09cd\u09a8",
+    L"bhabi", L"chudai", L"bangla choti", L"panu", L"magi", L"choda", L"randi",
+};
+static vector<wstring> romanticKeywords = {
+    L"hot dance", L"seductive", L"item song", L"belly dance",
+    L"kissing scene", L"bikini", L"sexy dance", L"cleavage",
+    L"semi nude", L"lingerie", L"erotic", L"navel show",
+};
+static vector<wstring> adultWebsites;
+
+// ─── File helpers ─────────────────────────────────────────────
+static wstring GetSaveFilePath() {
+    wstring p = L"C:\\ProgramData\\RasFocus";
+    CreateDirectoryW(p.c_str(), NULL);
+    SetFileAttributesW(p.c_str(), FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM);
+    return p + L"\\rf_sys_data.dat";
+}
+static wstring GetStrictSaveFilePath() {
+    wstring p = L"C:\\ProgramData\\RasFocus";
+    CreateDirectoryW(p.c_str(), NULL);
+    SetFileAttributesW(p.c_str(), FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM);
+    return p + L"\\rf_strict_data.dat";
+}
+
+// ─── Save / Load ──────────────────────────────────────────────
+static void SaveAdultSettings() {
+    wstring fp = GetSaveFilePath();
+    wofstream out(fp.c_str());
+    out.imbue(locale(out.getloc(), new codecvt_utf8<wchar_t>));
+    if (out.is_open()) {
+        out << cbAdultWeb << L" " << cbFbReels << L" " << cbHardcore << L" " << cbRomantic << L"\n";
+        out << controlMode << L" " << adultReligion << L" " << adultLanguage << L" " << totalBlockedAdultCount << L"\n";
+        out << cbPeriodicPopups << L" " << cb24HourLock << L" " << lock24hEndTime << L"\n";
+        out << isAdultFocusActive << L" " << focusEndTime << L"\n";
+        out << customAdultKeywords.size() << L"\n";
+        for (auto& k : customAdultKeywords) out << k.name << L"\n";
+        out.close();
+    }
+}
+static void SaveStrictSettings() {
+    wstring fp = GetStrictSaveFilePath();
+    wofstream out(fp.c_str());
+    out.imbue(locale(out.getloc(), new codecvt_utf8<wchar_t>));
+    if (out.is_open()) {
+        out << cbSilentUrl << L" " << cbDnsFilter << L" " << cbSafeSearch << L" " << cbIncognito << L" " << cbStrictMode << L"\n";
+        out << isStrictFocusActive << L" " << strictFocusEndTime << L"\n";
+        out.close();
+    }
+}
+
+static vector<wstring> LoadAdultSitesFromResource() {
+    vector<wstring> sites;
+    HRSRC hRes = FindResource(NULL, MAKEINTRESOURCE(105), RT_RCDATA);
+    if (!hRes) return sites;
+    HGLOBAL hData = LoadResource(NULL, hRes);
+    if (!hData) return sites;
+    DWORD size = SizeofResource(NULL, hRes);
+    const char* data = (const char*)LockResource(hData);
+    if (data && size > 0) {
+        string fc(data, size); stringstream ss(fc); string line;
+        while (getline(ss, line)) {
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            if (!line.empty()) sites.push_back(wstring(line.begin(), line.end()));
+        }
+    }
+    return sites;
+}
+
+static void LoadAdultSettings() {
+    if (adultWebsites.empty()) {
+        adultWebsites = LoadAdultSitesFromResource();
+        if (adultWebsites.empty())
+            adultWebsites = { L"pornhub.com", L"xvideos.com", L"xnxx.com", L"xhamster.com", L"redtube.com" };
+    }
+    wstring fp = GetSaveFilePath();
+    wifstream in(fp.c_str());
+    in.imbue(locale(in.getloc(), new codecvt_utf8<wchar_t>));
+    if (in.is_open()) {
+        in >> cbAdultWeb >> cbFbReels >> cbHardcore >> cbRomantic;
+        in >> controlMode >> adultReligion >> adultLanguage >> totalBlockedAdultCount;
+        in >> cbPeriodicPopups >> cb24HourLock >> lock24hEndTime;
+        in >> isAdultFocusActive >> focusEndTime;
+        if (cb24HourLock && GetTickCount64() >= lock24hEndTime) { cb24HourLock = false; isAdultFocusActive = false; }
+        else if (cb24HourLock) isAdultFocusActive = true;
+        if (isAdultFocusActive && controlMode == 0 && GetTickCount64() >= focusEndTime && !cb24HourLock) isAdultFocusActive = false;
+        size_t kSize = 0; in >> kSize; in.ignore();
+        customAdultKeywords.clear();
+        for (size_t i = 0; i < kSize; i++) {
+            wstring line; getline(in, line);
+            if (!line.empty()) customAdultKeywords.push_back({ line });
+        }
+        in.close();
+    }
+}
+
+void LoadStrictSettings() {
+    wstring fp = GetStrictSaveFilePath();
+    wifstream in(fp.c_str());
+    in.imbue(locale(in.getloc(), new codecvt_utf8<wchar_t>));
+    if (in.is_open()) {
+        in >> cbSilentUrl >> cbDnsFilter >> cbSafeSearch >> cbIncognito >> cbStrictMode;
+        in >> isStrictFocusActive >> strictFocusEndTime;
+        if (isStrictFocusActive && GetTickCount64() >= strictFocusEndTime) isStrictFocusActive = false;
+        in.close();
+    }
+}
+
+// ─── Popup Logic ──────────────────────────────────────────────
+struct PopupData { wstring quote; bool isFullScreen; };
+
+static LRESULT CALLBACK AdultPopupWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    if (msg == WM_PAINT) {
+        PAINTSTRUCT ps; HDC hdc = BeginPaint(hwnd, &ps);
+        RECT rc; GetClientRect(hwnd, &rc);
+        PopupData* pd = (PopupData*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+        HBRUSH bg = CreateSolidBrush(pd && pd->isFullScreen ? RGB(20,24,36) : RGB(15,70,38));
+        FillRect(hdc, &rc, bg); DeleteObject(bg);
+        if (pd) {
+            SetTextColor(hdc, RGB(255,255,255));
+            SetBkMode(hdc, TRANSPARENT);
+            HFONT fnt = CreateFontW(pd->isFullScreen ? 44 : 34, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0, 0, 0, L"Segoe UI");
+            HFONT old = (HFONT)SelectObject(hdc, fnt);
+            RECT tr = { 40, 40, rc.right-40, rc.bottom-40 };
+            DrawTextW(hdc, pd->quote.c_str(), -1, &tr, DT_CENTER | DT_VCENTER | DT_WORDBREAK);
+            SelectObject(hdc, old); DeleteObject(fnt);
+        }
+        EndPaint(hwnd, &ps); return 0;
+    }
+    if (msg == WM_TIMER && wParam == 2) { KillTimer(hwnd, 2); DestroyWindow(hwnd); PostQuitMessage(0); return 0; }
+    if (msg == WM_KEYDOWN && wParam == VK_ESCAPE) {
+        PopupData* pd = (PopupData*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+        if (pd && pd->isFullScreen) { DestroyWindow(hwnd); PostQuitMessage(0); return 0; }
+    }
+    if (msg == WM_DESTROY) { PopupData* pd = (PopupData*)GetWindowLongPtr(hwnd, GWLP_USERDATA); if (pd) delete pd; }
+    return DefWindowProc(hwnd, msg, wParam, lParam);
+}
+
+static void SafePopupThread(wstring quote, bool fullScreen = false) {
+    WNDCLASSW wc = {}; wc.lpfnWndProc = AdultPopupWndProc; wc.hInstance = GetModuleHandle(NULL);
+    wc.lpszClassName = L"RasFocusAdultPopupClass"; wc.hbrBackground = (HBRUSH)GetStockObject(NULL_BRUSH);
+    RegisterClassW(&wc);
+    int sw = GetSystemMetrics(SM_CXSCREEN), sh = GetSystemMetrics(SM_CYSCREEN);
+    int w = fullScreen ? sw : 880, h = fullScreen ? sh : 240;
+    int x = fullScreen ? 0 : (sw-w)/2, y = fullScreen ? 0 : 48;
+    HWND hPopup = CreateWindowExW(WS_EX_TOPMOST|WS_EX_TOOLWINDOW|WS_EX_LAYERED,
+        L"RasFocusAdultPopupClass", L"Alert", WS_POPUP, x, y, w, h, NULL, NULL, GetModuleHandle(NULL), NULL);
+    if (hPopup) {
+        PopupData* d = new PopupData{quote, fullScreen};
+        SetWindowLongPtr(hPopup, GWLP_USERDATA, (LONG_PTR)d);
+        SetLayeredWindowAttributes(hPopup, 0, fullScreen ? 248 : 235, LWA_ALPHA);
+        ShowWindow(hPopup, SW_SHOW); SetForegroundWindow(hPopup);
+        if (!fullScreen) SetTimer(hPopup, 2, 6000, NULL);
+        MSG msg2; while (GetMessage(&msg2, NULL, 0, 0)) { TranslateMessage(&msg2); DispatchMessage(&msg2); }
+    }
+}
+
+static wstring toLowerW_Logic(wstring s) { for (auto& c : s) c = towlower(c); return s; }
+
+static void TriggerAdultPopup(bool isWarning = false, wstring customMsg = L"", bool isFullScreen = false) {
+    if (!isFullScreen) { totalBlockedAdultCount++; SaveAdultSettings(); }
+    wstring finalQuote;
+    if (isWarning) { finalQuote = customMsg; }
+    else {
+        int idx = 0;
+        if (adultReligion == 0) { idx = rand() % muslimQuotes.size(); finalQuote = (adultLanguage == 0) ? muslimQuotes[idx].bn : muslimQuotes[idx].en; }
+        else if (adultReligion == 1) { idx = rand() % hinduQuotes.size(); finalQuote = (adultLanguage == 0) ? hinduQuotes[idx].bn : hinduQuotes[idx].en; }
+        else if (adultReligion == 2) { idx = rand() % christianQuotes.size(); finalQuote = (adultLanguage == 0) ? christianQuotes[idx].bn : christianQuotes[idx].en; }
+        else { idx = rand() % universalQuotes.size(); finalQuote = (adultLanguage == 0) ? universalQuotes[idx].bn : universalQuotes[idx].en; }
+    }
+    thread t(SafePopupThread, finalQuote, isFullScreen); t.detach();
+}
+
+static void closeActiveTab() {
+    keybd_event(VK_CONTROL, 0, 0, 0); keybd_event('W', 0, 0, 0);
+    keybd_event('W', 0, KEYEVENTF_KEYUP, 0); keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0);
+}
+
+// ─── Silent Monitor ───────────────────────────────────────────
+static wstring lastLoggedUrl;
+static void LogSilentUrl(const wstring& windowTitle, const wstring& url) {
+    if (url.empty() || url == lastLoggedUrl) return;
+    lastLoggedUrl = url;
+    time_t now = time(0); tm* ltm = localtime(&now); char ts[64];
+    strftime(ts, sizeof(ts), "%Y-%m-%d %I:%M:%S %p", ltm);
+    wstring wTs(ts, ts + strlen(ts));
+    wofstream out(L"C:\\ProgramData\\RasFocus\\silent_monitor_log.txt", ios::app);
+    out.imbue(locale(out.getloc(), new codecvt_utf8<wchar_t>));
+    if (out.is_open()) { out << L"[" << wTs << L"] TITLE: " << windowTitle << L" | URL: " << url << L"\n"; out.close(); }
+}
+
+// ─── Keyboard Hook ────────────────────────────────────────────
+static HHOOK hKeyboardHook = NULL;
+static string globalKeyBuffer;
+
+static LRESULT CALLBACK KeyboardHookProc(int nCode, WPARAM wParam, LPARAM lParam) {
+    if (nCode >= 0 && wParam == WM_KEYDOWN && !isPanicActive) {
+        KBDLLHOOKSTRUCT* ks = (KBDLLHOOKSTRUCT*)lParam; DWORD vk = ks->vkCode;
+        if ((vk >= 'A' && vk <= 'Z') || (vk >= '0' && vk <= '9') || vk == VK_SPACE || vk == VK_OEM_PERIOD) {
+            char c = (vk == VK_OEM_PERIOD) ? '.' : tolower(MapVirtualKey(vk, MAPVK_VK_TO_CHAR));
+            globalKeyBuffer += c;
+            if (globalKeyBuffer.length() > 100) globalKeyBuffer.erase(0, 1);
+            wstring wb(globalKeyBuffer.begin(), globalKeyBuffer.end()); bool block = false;
+            if (cbHardcore && !block) for (const auto& k : hardcoreKeywords) if (wb.find(toLowerW_Logic(k)) != wstring::npos) { block = true; break; }
+            if (cbRomantic && !block) for (const auto& k : romanticKeywords) if (wb.find(toLowerW_Logic(k)) != wstring::npos) { block = true; break; }
+            if (cbAdultWeb && !block) for (const auto& w2 : adultWebsites) { size_t dp = w2.find(L"."); wstring cn = (dp != wstring::npos) ? w2.substr(0, dp) : w2; if (cn.length() > 2 && wb.find(cn) != wstring::npos) { block = true; break; } }
+            if (!customAdultKeywords.empty() && !block) for (const auto& it : customAdultKeywords) if (!it.name.empty() && wb.find(toLowerW_Logic(it.name)) != wstring::npos) { block = true; break; }
+            if (block) { globalKeyBuffer = ""; closeActiveTab(); TriggerAdultPopup(); }
+        } else if (vk == VK_BACK && !globalKeyBuffer.empty()) globalKeyBuffer.pop_back();
+    }
+    return CallNextHookEx(hKeyboardHook, nCode, wParam, lParam);
+}
+static void StartKeyloggerThread() {
+    hKeyboardHook = SetWindowsHookEx(WH_KEYBOARD_LL, KeyboardHookProc, NULL, 0);
+    MSG msg2; while (GetMessage(&msg2, NULL, 0, 0)) { TranslateMessage(&msg2); DispatchMessage(&msg2); }
+}
+
+// ─── UIA Browser URL ──────────────────────────────────────────
+static IUIAutomation* pAutomation = NULL;
+static wstring GetBrowserURL_Fallback(HWND hBrowser) {
+    wstring url;
+    if (!pAutomation) return url;
+    IUIAutomationElement* pEl = NULL;
+    if (SUCCEEDED(pAutomation->ElementFromHandle(hBrowser, &pEl)) && pEl) {
+        IUIAutomationCondition* pCond = NULL; IUIAutomationElement* pEdit = NULL;
+        VARIANT v; v.vt = VT_I4; v.lVal = UIA_EditControlTypeId;
+        pAutomation->CreatePropertyCondition(UIA_ControlTypePropertyId, v, &pCond);
+        if (pCond) { pEl->FindFirst(TreeScope_Descendants, pCond, &pEdit); pCond->Release(); }
+        if (!pEdit) {
+            VARIANT vn; vn.vt = VT_BSTR; vn.bstrVal = SysAllocString(L"Address and search bar");
+            pAutomation->CreatePropertyCondition(UIA_NamePropertyId, vn, &pCond);
+            if (pCond) { pEl->FindFirst(TreeScope_Descendants, pCond, &pEdit); pCond->Release(); }
+            SysFreeString(vn.bstrVal);
+        }
+        if (pEdit) {
+            VARIANT vv; VariantInit(&vv);
+            if (SUCCEEDED(pEdit->GetCurrentPropertyValue(UIA_ValueValuePropertyId, &vv)) && vv.vt == VT_BSTR && vv.bstrVal)
+                url = wstring(vv.bstrVal);
+            VariantClear(&vv); pEdit->Release();
+        }
+        pEl->Release();
+    }
+    return url;
+}
+
+// ─── Registry Policy Helpers ──────────────────────────────────
+static void SetRegPolicy(HKEY hKeyRoot, const char* subKey, const char* valueName, DWORD data) {
+    HKEY hKey;
+    if (RegCreateKeyExA(hKeyRoot, subKey, 0, NULL, REG_OPTION_NON_VOLATILE, KEY_WRITE, NULL, &hKey, NULL) == ERROR_SUCCESS) {
+        RegSetValueExA(hKey, valueName, 0, REG_DWORD, (const BYTE*)&data, sizeof(data));
+        RegCloseKey(hKey);
+    }
+}
+static void RemoveRegPolicy(HKEY hKeyRoot, const char* subKey, const char* valueName) {
+    HKEY hKey;
+    if (RegOpenKeyExA(hKeyRoot, subKey, 0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
+        RegDeleteValueA(hKey, valueName); RegCloseKey(hKey);
+    }
+}
+
+// ─── DNS / SafeSearch / Hosts ─────────────────────────────────
+static void SetFamilyDNS(bool enable) {
+    SHELLEXECUTEINFOW sei = { sizeof(sei) }; sei.lpVerb = L"runas"; sei.lpFile = L"cmd.exe"; sei.nShow = SW_HIDE;
+    wstring args = enable
+        ? L"/c wmic nicconfig where (IPEnabled=TRUE) call SetDNSServerSearchOrder (\"1.1.1.3\", \"1.0.0.3\")"
+        : L"/c wmic nicconfig where (IPEnabled=TRUE) call SetDNSServerSearchOrder ()";
+    sei.lpParameters = args.c_str(); ShellExecuteExW(&sei);
+    WinExec("ipconfig /flushdns", SW_HIDE);
+}
+static void ToggleSafeSearchViaBat(bool enable) {
+    wchar_t tempPath[MAX_PATH]; GetTempPathW(MAX_PATH, tempPath);
+    wstring batPath = wstring(tempPath) + L"RasFocus_SafeSearch.bat";
+    wofstream batFile(batPath);
+    batFile.imbue(locale(batFile.getloc(), new codecvt_utf8<wchar_t>));
+    if (!batFile.is_open()) return;
+    batFile << L"@echo off\r\n";
+    if (enable) {
+        batFile << L"reg add \"HKLM\\SOFTWARE\\Policies\\Google\\Chrome\" /v ForceGoogleSafeSearch /t REG_DWORD /d 1 /f\r\n";
+        batFile << L"reg add \"HKLM\\SOFTWARE\\Policies\\Google\\Chrome\" /v ForceYouTubeRestrict /t REG_DWORD /d 2 /f\r\n";
+        batFile << L"reg add \"HKLM\\SOFTWARE\\Policies\\Microsoft\\Edge\" /v ForceGoogleSafeSearch /t REG_DWORD /d 1 /f\r\n";
+        batFile << L"reg add \"HKLM\\SOFTWARE\\Policies\\Microsoft\\Edge\" /v ForceBingSafeSearch /t REG_DWORD /d 1 /f\r\n";
+        batFile << L"reg add \"HKLM\\SOFTWARE\\Policies\\Microsoft\\Edge\" /v ForceYouTubeRestrict /t REG_DWORD /d 2 /f\r\n";
+        batFile << L"reg add \"HKLM\\SOFTWARE\\Policies\\BraveSoftware\\Brave\" /v ForceGoogleSafeSearch /t REG_DWORD /d 1 /f\r\n";
+    } else {
+        batFile << L"reg delete \"HKLM\\SOFTWARE\\Policies\\Google\\Chrome\" /v ForceGoogleSafeSearch /f >nul 2>&1\r\n";
+        batFile << L"reg delete \"HKLM\\SOFTWARE\\Policies\\Google\\Chrome\" /v ForceYouTubeRestrict /f >nul 2>&1\r\n";
+        batFile << L"reg delete \"HKLM\\SOFTWARE\\Policies\\Microsoft\\Edge\" /v ForceGoogleSafeSearch /f >nul 2>&1\r\n";
+        batFile << L"reg delete \"HKLM\\SOFTWARE\\Policies\\Microsoft\\Edge\" /v ForceBingSafeSearch /f >nul 2>&1\r\n";
+        batFile << L"reg delete \"HKLM\\SOFTWARE\\Policies\\Microsoft\\Edge\" /v ForceYouTubeRestrict /f >nul 2>&1\r\n";
+        batFile << L"reg delete \"HKLM\\SOFTWARE\\Policies\\BraveSoftware\\Brave\" /v ForceGoogleSafeSearch /f >nul 2>&1\r\n";
+    }
+    batFile << L"ipconfig /flushdns >nul\r\n";
+    batFile.close();
+    SHELLEXECUTEINFOW sei = { sizeof(sei) }; sei.lpVerb = L"runas"; sei.lpFile = batPath.c_str();
+    sei.nShow = SW_HIDE; sei.fMask = SEE_MASK_NOCLOSEPROCESS;
+    if (ShellExecuteExW(&sei) && sei.hProcess) { WaitForSingleObject(sei.hProcess, INFINITE); CloseHandle(sei.hProcess); }
+    DeleteFileW(batPath.c_str());
+}
+static void EnforceStrictProtocols() {
+    string hp = "C:\\Windows\\System32\\drivers\\etc\\hosts";
+    string tp = "C:\\Windows\\System32\\drivers\\etc\\hosts.temp";
+    ifstream fi(hp); ofstream fo(tp); string line; bool skip = false;
+    if (fi.is_open() && fo.is_open()) {
+        while (getline(fi, line)) {
+            if (line.find("# RasFocus Strict Start") != string::npos) skip = true;
+            if (!skip) fo << line << "\n";
+            if (line.find("# RasFocus Strict End") != string::npos) skip = false;
+        }
+        fi.close();
+    }
+    if (cbDnsFilter || cbSafeSearch) {
+        fo << "\n# RasFocus Strict Start\n";
+        if (cbSafeSearch) {
+            fo << "216.239.38.120 google.com\n216.239.38.120 www.google.com\n";
+            fo << "216.239.38.120 google.com.bd\n216.239.38.120 www.google.com.bd\n";
+            fo << "204.79.197.220 bing.com\n204.79.197.220 www.bing.com\n";
+            fo << "211.73.64.227 youtube.com\n211.73.64.227 www.youtube.com\n";
+            fo << "2001:4860:4802:32::78 google.com\n2001:4860:4802:32::78 www.google.com\n";
+        }
+        if (cbDnsFilter) {
+            for (const auto& st : vector<string>{"pornhub.com","xvideos.com","xnxx.com","xhamster.com","redtube.com"})
+                fo << "127.0.0.1 " << st << "\n127.0.0.1 www." << st << "\n";
+        }
+        fo << "# RasFocus Strict End\n";
+    }
+    fo.close();
+    remove(hp.c_str()); rename(tp.c_str(), hp.c_str());
+    WinExec("ipconfig /flushdns", SW_HIDE);
+    if (cbSafeSearch) {
+        SetRegPolicy(HKEY_LOCAL_MACHINE, "SOFTWARE\\Policies\\Google\\Chrome", "ForceGoogleSafeSearch", 1);
+        SetRegPolicy(HKEY_LOCAL_MACHINE, "SOFTWARE\\Policies\\Google\\Chrome", "ForceYouTubeRestrict", 2);
+        SetRegPolicy(HKEY_LOCAL_MACHINE, "SOFTWARE\\Policies\\Microsoft\\Edge", "ForceGoogleSafeSearch", 1);
+        SetRegPolicy(HKEY_LOCAL_MACHINE, "SOFTWARE\\Policies\\Microsoft\\Edge", "ForceBingSafeSearch", 1);
+        SetRegPolicy(HKEY_LOCAL_MACHINE, "SOFTWARE\\Policies\\Microsoft\\Edge", "ForceYouTubeRestrict", 2);
+        SetRegPolicy(HKEY_LOCAL_MACHINE, "SOFTWARE\\Policies\\BraveSoftware\\Brave", "ForceGoogleSafeSearch", 1);
+    } else {
+        RemoveRegPolicy(HKEY_LOCAL_MACHINE, "SOFTWARE\\Policies\\Google\\Chrome", "ForceGoogleSafeSearch");
+        RemoveRegPolicy(HKEY_LOCAL_MACHINE, "SOFTWARE\\Policies\\Google\\Chrome", "ForceYouTubeRestrict");
+        RemoveRegPolicy(HKEY_LOCAL_MACHINE, "SOFTWARE\\Policies\\Microsoft\\Edge", "ForceGoogleSafeSearch");
+        RemoveRegPolicy(HKEY_LOCAL_MACHINE, "SOFTWARE\\Policies\\Microsoft\\Edge", "ForceBingSafeSearch");
+        RemoveRegPolicy(HKEY_LOCAL_MACHINE, "SOFTWARE\\Policies\\Microsoft\\Edge", "ForceYouTubeRestrict");
+        RemoveRegPolicy(HKEY_LOCAL_MACHINE, "SOFTWARE\\Policies\\BraveSoftware\\Brave", "ForceGoogleSafeSearch");
+    }
+}
+
+// ─── Background Thread ────────────────────────────────────────
+static void AdultBackgroundThread() {
+    CoInitializeEx(NULL, COINIT_MULTITHREADED);
+    CoCreateInstance(CLSID_CUIAutomation, NULL, CLSCTX_INPROC_SERVER, IID_IUIAutomation, (void**)&pAutomation);
+    lastPeriodicPopupTime = GetTickCount();
+    wstring lastTitle;
+    while (true) {
+        if (cb24HourLock) {
+            if (GetTickCount64() >= lock24hEndTime) { cb24HourLock = false; isAdultFocusActive = false; SaveAdultSettings(); }
+            else isAdultFocusActive = true;
+        }
+        if (isAdultFocusActive && controlMode == 0 && GetTickCount64() >= focusEndTime && !cb24HourLock) { isAdultFocusActive = false; SaveAdultSettings(); }
+        if (cbPeriodicPopups && isAdultFocusActive) {
+            if (GetTickCount() - lastPeriodicPopupTime >= 25*60*1000) { TriggerAdultPopup(false, L"", true); lastPeriodicPopupTime = GetTickCount(); }
+        }
+        if (isStrictFocusActive && GetTickCount64() >= strictFocusEndTime) { isStrictFocusActive = false; SaveStrictSettings(); }
+        if (isPanicActive) {
+            if (GetTickCount() - panicStartTime < 15*60*1000) {
+                HWND ha = GetForegroundWindow();
+                if (ha) { wchar_t t[256]; GetWindowTextW(ha, t, 256); wstring tl = toLowerW_Logic(t);
+                    if (tl.find(L"chrome") != wstring::npos || tl.find(L"edge") != wstring::npos ||
+                        tl.find(L"firefox") != wstring::npos || tl.find(L"brave") != wstring::npos)
+                        PostMessage(ha, WM_CLOSE, 0, 0); }
+            } else isPanicActive = false;
+        }
+        if (cbIncognito) {
+            HWND ha = GetForegroundWindow();
+            if (ha) { wchar_t t[256]; GetWindowTextW(ha, t, 256); wstring tl = toLowerW_Logic(t);
+                if (tl.find(L"incognito") != wstring::npos || tl.find(L"inprivate") != wstring::npos)
+                    closeActiveTab(); }
+        }
+        if (cbStrictMode || isStrictFocusActive || isAdultFocusActive) {
+            HWND ha = GetForegroundWindow();
+            if (ha) { wchar_t t[256]; GetWindowTextW(ha, t, 256); wstring tl = toLowerW_Logic(t);
+                if (tl.find(L"task manager") != wstring::npos || tl.find(L"regedit") != wstring::npos ||
+                    tl.find(L"uninstall") != wstring::npos || tl.find(L"control panel") != wstring::npos)
+                    PostMessage(ha, WM_CLOSE, 0, 0); }
+        }
+        if (!isPanicActive && (cbAdultWeb || cbHardcore || cbRomantic || cbFbReels || isAdultFocusActive || g_parentForceAdultBlock)) {
+            HWND ha = GetForegroundWindow();
+            if (ha) {
+                wchar_t t[256]; GetWindowTextW(ha, t, 256); wstring title(t);
+                if (!title.empty() && title != lastTitle) {
+                    lastTitle = title; wstring lt = toLowerW_Logic(title); bool blk = false;
+                    if (cbHardcore && !blk) for (const auto& k : hardcoreKeywords) if (lt.find(toLowerW_Logic(k)) != wstring::npos) { blk = true; break; }
+                    if (cbRomantic && !blk) for (const auto& k : romanticKeywords) if (lt.find(toLowerW_Logic(k)) != wstring::npos) { blk = true; break; }
+                    if (!customAdultKeywords.empty() && !blk) for (const auto& it : customAdultKeywords) if (!it.name.empty() && lt.find(toLowerW_Logic(it.name)) != wstring::npos) { blk = true; break; }
+                    if (blk) { closeActiveTab(); TriggerAdultPopup(); }
+                    else if (lt.find(L"chrome") != wstring::npos || lt.find(L"edge") != wstring::npos || lt.find(L"brave") != wstring::npos) {
+                        wstring url = GetBrowserURL_Fallback(ha); bool ub = false;
+                        if (cbAdultWeb) for (const auto& s : adultWebsites) if (url.find(s) != wstring::npos || lt.find(s) != wstring::npos) { ub = true; break; }
+                        if (!ub && cbFbReels) { wstring lu = toLowerW_Logic(url);
+                            if (lu.find(L"facebook.com/reel") != wstring::npos || lu.find(L"instagram.com/reels") != wstring::npos || lu.find(L"youtube.com/shorts") != wstring::npos) ub = true; }
+                        if (cbSilentUrl && !ub) LogSilentUrl(title, url);
+                        if (ub) { closeActiveTab(); Sleep(280); TriggerAdultPopup(); lastTitle = L""; }
+                    }
+                }
+            }
+        }
+        Sleep(500);
+    }
+}
+
+static void InitAdultSystemOnBoot() {
+    if (!adultThreadStarted) {
+        LoadAdultSettings(); LoadStrictSettings();
+        thread t(AdultBackgroundThread); t.detach();
+        thread kl(StartKeyloggerThread); kl.detach();
+        adultThreadStarted = true;
+    }
+}
+
+struct AdultAutoStarter {
+    AdultAutoStarter() { thread t([](){ Sleep(1000); InitAdultSystemOnBoot(); }); t.detach(); }
+} g_adultAutoStarter;
+
+// ─── ImGui Helper: Toggle Switch ──────────────────────────────
+static bool ToggleSwitch(const char* id, bool* v, bool locked = false) {
+    ImVec2 pos = ImGui::GetCursorScreenPos();
+    float trackW = 36.0f, trackH = 18.0f, thumbD = 14.0f;
+    bool hov = ImGui::IsMouseHoveringRect(pos, {pos.x + trackW, pos.y + trackH});
+    bool clicked = false;
+    if (hov && ImGui::IsMouseClicked(0) && !locked) { *v = !*v; clicked = true; }
+    auto* dl = ImGui::GetWindowDrawList();
+    ImU32 trackClr = *v ? (locked ? IM_COL32(130,130,140,255) : IM_COL32(12,168,176,255)) : IM_COL32(215,222,230,255);
+    dl->AddRectFilled(pos, {pos.x + trackW, pos.y + trackH}, trackClr, 9.0f);
+    float thumbX = *v ? pos.x + trackW - thumbD - 2.0f : pos.x + 2.0f;
+    float thumbY = pos.y + (trackH - thumbD) / 2.0f;
+    dl->AddCircleFilled({thumbX + thumbD/2, thumbY + thumbD/2}, thumbD/2, IM_COL32(255,255,255,255));
+    ImGui::Dummy({trackW, trackH});
+    return clicked;
+}
+
+// ─── ImGui Helper: Colored Button ─────────────────────────────
+static bool ColorButton(const char* label, ImVec4 col, ImVec2 size = {0,0}) {
+    ImGui::PushStyleColor(ImGuiCol_Button, col);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {col.x*1.1f, col.y*1.1f, col.z*1.1f, 1.0f});
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive,  {col.x*0.9f, col.y*0.9f, col.z*0.9f, 1.0f});
+    bool pressed = ImGui::Button(label, size);
+    ImGui::PopStyleColor(3);
+    return pressed;
+}
+
+// ─── ImGui Helper: Checkbox with locked style ─────────────────
+static bool LockedCheckbox(const char* label, bool* v, bool locked) {
+    if (locked && *v) {
+        ImGui::PushStyleColor(ImGuiCol_CheckMark, ImVec4(0.51f,0.51f,0.55f,1));
+        ImGui::PushStyleColor(ImGuiCol_FrameBg,   ImVec4(0.51f,0.51f,0.55f,1));
+        bool dummy = true;
+        ImGui::Checkbox(label, &dummy);
+        ImGui::PopStyleColor(2);
+        return false;
+    }
+    return ImGui::Checkbox(label, v);
+}
+
+// ─── Time Spinner Helper ──────────────────────────────────────
+static void TimeSpinner(const char* id_h, const char* id_m, int& h, int& m) {
+    ImGui::SetNextItemWidth(60);
+    ImGui::InputInt(id_h, &h, 1, 1);
+    h = max(0, min(23, h));
+    ImGui::SameLine();
+    ImGui::Text("h");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(60);
+    ImGui::InputInt(id_m, &m, 5, 5);
+    m = (m + 60) % 60;
+    ImGui::SameLine();
+    ImGui::Text("m");
+}
+
+// ═══════════════════════════════════════════════════════════════
+// MAIN DRAW FUNCTION  (call inside an ImGui::Begin() window)
+// ═══════════════════════════════════════════════════════════════
+void DrawAdultBlockTab() {
+    InitAdultSystemOnBoot();
+
+    bool anyOverlay = showTimeOverlay || showPassOverlay || showStrictTimeOverlay || showLongTextOverlay;
+
+    // ─── ROW 1: Top control bar ───────────────────────────────
+    // Safe Focus button
+    {
+        bool locked24 = cb24HourLock;
+        bool selfLocked = isAdultFocusActive && controlMode == 0 && !locked24;
+        ImVec4 btnClr = isAdultFocusActive ? ClrRed : ClrGreen;
+        char focusLabel[64] = "Safe Focus";
+        if (isAdultFocusActive) {
+            if (locked24) {
+                ULONGLONG left = lock24hEndTime > GetTickCount64() ? lock24hEndTime - GetTickCount64() : 0;
+                snprintf(focusLabel, sizeof(focusLabel), "Lock (%lluh %llum)##safefocus", left/3600000, (left%3600000)/60000);
+            } else if (controlMode == 0) {
+                ULONGLONG left = focusEndTime > GetTickCount64() ? focusEndTime - GetTickCount64() : 0;
+                snprintf(focusLabel, sizeof(focusLabel), "Lock (%llum)##safefocus", (left/60000)+1);
+            } else {
+                snprintf(focusLabel, sizeof(focusLabel), "Stop Focus##safefocus");
+            }
+        }
+        bool canClick = !locked24 && !selfLocked;
+        if (!canClick) { ImGui::BeginDisabled(); }
+        if (ColorButton(focusLabel, btnClr, {130, 30})) {
+            if (isAdultFocusActive) {
+                if (controlMode == 1) { isStoppingFocus = true; memset(inputPassBuf, 0, sizeof(inputPassBuf)); showPassOverlay = true; }
+                else if (controlMode == 2) { isStoppingFocus = true; memset(inputLongTextBuf, 0, sizeof(inputLongTextBuf)); showLongTextOverlay = true; }
+                else { isAdultFocusActive = false; SaveAdultSettings(); }
+            } else {
+                if (controlMode == 0) showTimeOverlay = true;
+                else if (controlMode == 1) { isStoppingFocus = false; memset(inputPassBuf, 0, sizeof(inputPassBuf)); showPassOverlay = true; }
+                else { isStoppingFocus = false; memset(inputLongTextBuf, 0, sizeof(inputLongTextBuf)); showLongTextOverlay = true; }
+            }
+        }
+        if (!canClick) { ImGui::EndDisabled(); }
+    }
+
+    ImGui::SameLine();
+    // Control Mode dropdown
+    ImGui::SetNextItemWidth(110);
+    const char* ctrlItems[] = { "Self Control", "Parents Control", "Long Text" };
+    if (isAdultFocusActive) ImGui::BeginDisabled();
+    ImGui::Combo("##ControlMode", &controlMode, ctrlItems, 3);
+    if (isAdultFocusActive) ImGui::EndDisabled();
+    ImGui::SameLine();
+    // Religion dropdown
+    ImGui::SetNextItemWidth(100);
+    const char* relItems[] = { "Muslim", "Hindu", "Christian", "Universal" };
+    if (isAdultFocusActive) ImGui::BeginDisabled();
+    ImGui::Combo("##Religion", &adultReligion, relItems, 4);
+    if (isAdultFocusActive) ImGui::EndDisabled();
+    ImGui::SameLine();
+    // Language dropdown
+    ImGui::SetNextItemWidth(80);
+    const char* langItems[] = { "Bangla", "English" };
+    if (isAdultFocusActive) ImGui::BeginDisabled();
+    ImGui::Combo("##Language", &adultLanguage, langItems, 2);
+    if (isAdultFocusActive) ImGui::EndDisabled();
+    ImGui::SameLine();
+
+    // Strict Focus
+    {
+        ImVec4 btnClr = isStrictFocusActive ? ClrRed : ClrGreen;
+        char label[64] = "Strict Focus";
+        if (isStrictFocusActive) {
+            ULONGLONG left = strictFocusEndTime > GetTickCount64() ? strictFocusEndTime - GetTickCount64() : 0;
+            snprintf(label, sizeof(label), "Lock (%llum)##sf", (left/60000)+1);
+        }
+        if (ColorButton(label, btnClr, {120, 30})) {
+            if (!g_isPremiumUser) { g_showUpgradePopup = true; }
+            else { isStrictFocusActive ? (isStrictFocusActive = false, SaveStrictSettings()) : (showStrictTimeOverlay = true); }
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Starts a timed session where Task Manager\n& Registry Editor are totally blocked.");
+    }
+    ImGui::SameLine();
+
+    // Panic Mode
+    {
+        ImVec4 btnClr = isPanicActive ? ClrOrange : ClrRed;
+        if (ColorButton(isPanicActive ? "Panic Active##panic" : "Panic Mode##panic", btnClr, {110, 30})) {
+            if (!g_isPremiumUser) { g_showUpgradePopup = true; }
+            else { isPanicActive = true; panicStartTime = GetTickCount(); }
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Emergency! Instantly kills all web\nbrowsers for the next 15 minutes.");
+    }
+
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    // ─── TWO COLUMN LAYOUT ────────────────────────────────────
+    ImGui::Columns(2, "MainCols", false);
+    ImGui::SetColumnWidth(0, 390);
+
+    // ─── LEFT COLUMN: Safe Browsing ───────────────────────────
+    ImGui::TextColored(ClrTeal, "Safe Browsing Rules");
+    ImGui::Spacing();
+
+    bool locked = isAdultFocusActive;
+
+    if (LockedCheckbox("Block Adult Websites", &cbAdultWeb, locked)) SaveAdultSettings();
+    if (LockedCheckbox("Block Hardcore Keywords", &cbHardcore, locked)) SaveAdultSettings();
+    if (LockedCheckbox("Block Romantic / Softcore", &cbRomantic, locked)) SaveAdultSettings();
+    if (LockedCheckbox("Block FB Reels / YT Shorts", &cbFbReels, locked)) SaveAdultSettings();
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+    ImGui::TextColored(ClrTeal, "Custom Keywords");
+    ImGui::Spacing();
+
+    ImGui::SetNextItemWidth(280);
+    ImGui::InputText("##customkw", customInputBuf, sizeof(customInputBuf));
+    ImGui::SameLine();
+    if (ColorButton("+ Add##addkw", ClrTeal, {60, 0})) {
+        if (strlen(customInputBuf) > 0) {
+            string narrowStr(customInputBuf);
+            wstring wideStr(narrowStr.begin(), narrowStr.end());
+            customAdultKeywords.push_back({ wideStr });
+            memset(customInputBuf, 0, sizeof(customInputBuf));
+            SaveAdultSettings();
+        }
+    }
+
+    // Custom keywords table
+    ImGui::BeginChild("##kwlist", {380, 110}, true);
+    if (customAdultKeywords.empty()) {
+        ImGui::TextDisabled("No custom keywords added yet");
+    } else {
+        for (int i = 0; i < (int)customAdultKeywords.size(); i++) {
+            wstring& wn = customAdultKeywords[i].name;
+            string n(wn.begin(), wn.end());
+            ImGui::Text("%s", n.c_str());
+            if (!locked) {
+                ImGui::SameLine(340);
+                char btnId[32]; snprintf(btnId, sizeof(btnId), "X##kw%d", i);
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0,0,0,0));
+                ImGui::PushStyleColor(ImGuiCol_Text, (ImVec4)ClrRed);
+                if (ImGui::Button(btnId)) { customAdultKeywords.erase(customAdultKeywords.begin() + i); SaveAdultSettings(); break; }
+                ImGui::PopStyleColor(2);
+            }
+        }
+    }
+    ImGui::EndChild();
+
+    // ─── RIGHT COLUMN: Strict Protocols ───────────────────────
+    ImGui::NextColumn();
+    ImGui::TextColored(ClrTeal, "Strict Protocol Settings");
+    ImGui::Spacing();
+
+    struct StrictCard { const char* icon; const char* title; const char* desc; bool* state; const char* tooltip; bool isPremium; };
+    StrictCard cards[] = {
+        {"[URL]",  "Silent Monitor",   "Log & detect URLs.",        &cbSilentUrl,  "Saves visited URLs in a hidden text file:\nC:\\ProgramData\\RasFocus\\silent_monitor_log.txt", true},
+        {"[DNS]",  "Family DNS",       "Cloudflare safe DNS.",      &cbDnsFilter,  "Forces Cloudflare 1.1.1.3 DNS to filter\nadult websites at the network level.",              true},
+        {"[SCH]",  "Safe Search",      "Force web SafeSearch.",     &cbSafeSearch, "Enforces SafeSearch via Windows Hosts\nfile and Browser Registry Policies.",                 true},
+        {"[INC]",  "Block Incognito",  "Close private windows.",    &cbIncognito,  "Automatically detects and closes any\nIncognito or InPrivate browser window.",               true},
+        {"[LCK]",  "Strict Lock Mode", "Block TaskMgr & Regedit.", &cbStrictMode, "Locks Task Manager, Control Panel,\nand Registry to prevent bypassing.",                    true},
+    };
+
+    // Draw cards in a 2-wide grid
+    for (int i = 0; i < 5; i++) {
+        if (i > 0 && i != 4) { if (i % 2 == 0) ImGui::Spacing(); else ImGui::SameLine(); }
+
+        bool st   = *cards[i].state;
+        bool lockedAndOn = locked && st;
+        bool canToggle = !lockedAndOn;
+
+        ImVec4 cardBg = st ? ClrTealLight : ClrCardBg;
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, cardBg);
+        float cardW = (i == 4) ? 370.0f : 180.0f;
+        char childId[32]; snprintf(childId, sizeof(childId), "##card%d", i);
+        ImGui::BeginChild(childId, {cardW, 65.0f}, true, ImGuiWindowFlags_NoScrollbar);
+
+        ImGui::TextColored(st ? ClrTeal : ClrGrayText, "%s", cards[i].icon);
+        ImGui::SameLine();
+        ImGui::Text("%s", cards[i].title);
+        ImGui::SameLine(cardW - 90);
+        bool newState = *cards[i].state;
+        if (!canToggle) ImGui::BeginDisabled();
+        ToggleSwitch(childId, &newState, lockedAndOn);
+        if (newState != *cards[i].state) {
+            if (!g_isPremiumUser) { g_showUpgradePopup = true; }
+            else {
+                *cards[i].state = newState;
+                if (cards[i].state == &cbDnsFilter)  { SetFamilyDNS(cbDnsFilter); EnforceStrictProtocols(); }
+                if (cards[i].state == &cbSafeSearch) { ToggleSafeSearchViaBat(cbSafeSearch); if(!cbSafeSearch){ int r=MessageBox(NULL,"Close browsers to apply changes?","RasFocus",MB_YESNO|MB_ICONQUESTION); if(r==IDYES){ system("taskkill /F /IM chrome.exe /T >nul 2>&1"); system("taskkill /F /IM msedge.exe /T >nul 2>&1"); system("taskkill /F /IM brave.exe /T >nul 2>&1"); } } }
+                SaveStrictSettings();
+            }
+        }
+        if (!canToggle) ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::TextDisabled("[i]");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", cards[i].tooltip);
+
+        ImGui::TextDisabled("%s", cards[i].desc);
+        ImGui::EndChild();
+        ImGui::PopStyleColor();
+    }
+
+    ImGui::Spacing();
+    ImGui::TextColored(ClrTeal, "Advanced Options");
+    ImGui::Spacing();
+
+    // 24h Lockdown card
+    ImGui::SameLine();
+    ImGui::BeginChild("##24h", {180, 70}, true);
+    ImGui::TextColored(cb24HourLock ? ClrTeal : ClrOrange, "[LK]");
+    ImGui::SameLine(); ImGui::Text("24-Hour Lock");
+    ImGui::SameLine(135);
+    bool v24 = cb24HourLock;
+    if (!cb24HourLock) {
+        ToggleSwitch("##24htog", &v24);
+        if (v24 && !cb24HourLock) {
+            if (!g_isPremiumUser) { g_showUpgradePopup = true; }
+            else {
+                int r = MessageBox(NULL, "This locks for 24 hours and CANNOT be undone. Proceed?", "24h Lock", MB_YESNO|MB_ICONWARNING);
+                if (r == IDYES) { cb24HourLock = true; isAdultFocusActive = true; lock24hEndTime = GetTickCount64() + 86400000ULL; SaveAdultSettings(); }
+            }
+        }
+    } else {
+        ImGui::BeginDisabled();
+        ToggleSwitch("##24htog_disabled", &v24);
+        ImGui::EndDisabled();
+    }
+    ImGui::TextDisabled("Cannot be undone.");
+    if (cb24HourLock) {
+        ULONGLONG left = lock24hEndTime > GetTickCount64() ? lock24hEndTime - GetTickCount64() : 0;
+        char rem[64]; snprintf(rem, sizeof(rem), "%lluh %llum left", left/3600000, (left%3600000)/60000);
+        ImGui::TextColored(ClrTeal, "%s", rem);
+    }
+    ImGui::EndChild();
+
+    ImGui::SameLine();
+    // Periodic Popups card
+    ImGui::BeginChild("##popups", {180, 70}, true);
+    ImGui::TextColored(cbPeriodicPopups ? ClrTeal : ClrGrayText, "[POP]");
+    ImGui::SameLine(); ImGui::Text("Reminders");
+    ImGui::SameLine(135);
+    ToggleSwitch("##poptog", &cbPeriodicPopups);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Shows a fullscreen motivational\nquote automatically every 25 mins.");
+    ImGui::TextDisabled("Fullscreen quote/25 min.");
+    ImGui::EndChild();
+
+    ImGui::Columns(1);
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    // ─── Status Bar ───────────────────────────────────────────
+    ImGui::TextColored(ClrTeal, "Active Protections");
+    ImGui::Spacing();
+
+    struct Badge { const char* label; bool active; };
+    Badge badges[] = {
+        {"URL Monitor",   cbSilentUrl},
+        {"DNS Filter",    cbDnsFilter},
+        {"SafeSearch",    cbSafeSearch},
+        {"No Incognito",  cbIncognito},
+        {"Strict Lock",   cbStrictMode},
+        {"Focus Active",  isStrictFocusActive || isAdultFocusActive},
+    };
+    for (auto& b : badges) {
+        if (b.active) {
+            ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4)ClrTeal);
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, (ImVec4)ClrTeal);
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,  (ImVec4)ClrTeal);
+            ImGui::Button(b.label);
+            ImGui::PopStyleColor(3);
+        } else {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.95f,0.95f,0.97f,1));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.95f,0.95f,0.97f,1));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.95f,0.95f,0.97f,1));
+            ImGui::PushStyleColor(ImGuiCol_Text, (ImVec4)ClrGrayText);
+            ImGui::Button(b.label);
+            ImGui::PopStyleColor(4);
+        }
+        ImGui::SameLine();
+    }
+    ImGui::NewLine();
+
+    // ─── OVERLAYS ─────────────────────────────────────────────
+    if (anyOverlay) {
+        ImGuiIO& io = ImGui::GetIO();
+        ImGui::SetNextWindowPos({io.DisplaySize.x*0.5f, io.DisplaySize.y*0.5f}, ImGuiCond_Always, {0.5f,0.5f});
+        ImGui::SetNextWindowSize({430, 0}, ImGuiCond_Always);
+        ImGui::SetNextWindowBgAlpha(0.98f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {20,20});
+        ImGui::Begin("##overlay", nullptr, ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_NoMove|ImGuiWindowFlags_AlwaysAutoResize|ImGuiWindowFlags_NoSavedSettings);
+
+        if (showTimeOverlay || showStrictTimeOverlay) {
+            ImGui::TextColored(ClrTeal, "Set Focus Duration");
+            ImGui::Separator(); ImGui::Spacing();
+            int& hrs = showTimeOverlay ? focusHours : strictFocusHours;
+            int& mns = showTimeOverlay ? focusMins  : strictFocusMins;
+            TimeSpinner("##hrs", "##mns", hrs, mns);
+            ImGui::Spacing();
+            if (ImGui::Button("Cancel##tovc", {140,36})) { showTimeOverlay = showStrictTimeOverlay = false; }
+            ImGui::SameLine();
+            if (ColorButton("Start Focus##tovs", ClrTeal, {160,36})) {
+                if (showTimeOverlay) { isAdultFocusActive = true; focusEndTime = GetTickCount64() + (ULONGLONG)hrs*3600000 + (ULONGLONG)mns*60000; showTimeOverlay = false; SaveAdultSettings(); }
+                else { isStrictFocusActive = true; strictFocusEndTime = GetTickCount64() + (ULONGLONG)hrs*3600000 + (ULONGLONG)mns*60000; showStrictTimeOverlay = false; SaveStrictSettings(); }
+            }
+        } else if (showPassOverlay) {
+            ImGui::TextColored(ClrTeal, isStoppingFocus ? "Enter Password to Stop" : "Enter Parents' Password");
+            ImGui::Separator(); ImGui::Spacing();
+            ImGui::SetNextItemWidth(390);
+            ImGui::InputText("##passInput", inputPassBuf, sizeof(inputPassBuf), ImGuiInputTextFlags_Password);
+            ImGui::Spacing();
+            if (ImGui::Button("Cancel##pov", {140,36})) { showPassOverlay = false; memset(inputPassBuf,0,sizeof(inputPassBuf)); }
+            ImGui::SameLine();
+            if (ColorButton("Confirm##povc", ClrTeal, {140,36})) {
+                if (strlen(inputPassBuf) > 0) {
+                    isAdultFocusActive = !isStoppingFocus;
+                    showPassOverlay = false; memset(inputPassBuf,0,sizeof(inputPassBuf)); SaveAdultSettings();
+                }
+            }
+        } else if (showLongTextOverlay) {
+            ImGui::SetNextWindowSize({500, 0}, ImGuiCond_Always);
+            ImGui::TextColored(ClrTeal, "Type Long Text to Lock");
+            ImGui::TextDisabled("You must retype this exact text to stop the session.");
+            ImGui::Separator(); ImGui::Spacing();
+            ImGui::SetNextItemWidth(460);
+            ImGui::InputTextMultiline("##ltInput", inputLongTextBuf, sizeof(inputLongTextBuf), {460, 160});
+            // Word count
+            int wc = 0; bool inW = false;
+            for (char c : string(inputLongTextBuf)) { if (isspace((unsigned char)c)) { inW=false; } else { if (!inW){wc++;inW=true;} } }
+            ImGui::TextColored(wc>=10 ? ClrGreen : ClrGrayText, "Words: %d (min 10)", wc);
+            ImGui::Spacing();
+            if (ImGui::Button("Cancel##ltov", {140,36})) { showLongTextOverlay = false; memset(inputLongTextBuf,0,sizeof(inputLongTextBuf)); }
+            ImGui::SameLine();
+            bool canConfirm = wc >= 10;
+            if (!canConfirm) ImGui::BeginDisabled();
+            if (ColorButton("Lock with this Text##ltc", ClrTeal, {200,36})) {
+                isAdultFocusActive = true; showLongTextOverlay = false; SaveAdultSettings();
+            }
+            if (!canConfirm) ImGui::EndDisabled();
+        }
+
+        ImGui::End();
+        ImGui::PopStyleVar();
+    }
+}
+
+// ─── Schedule Integration API ─────────────────────────────────
+void AdultBlock_ApplyForSchedule(bool enable) {
+    if (enable) {
+        isAdultFocusActive = true; cbAdultWeb = true; cbHardcore = true; cbRomantic = true;
+        focusEndTime = 0; EnforceStrictProtocols(); SaveAdultSettings();
+    } else {
+        if (!cb24HourLock) { isAdultFocusActive = false; EnforceStrictProtocols(); SaveAdultSettings(); }
+    }
+}
