@@ -1,19 +1,12 @@
 // tab_adult.cpp - ImGui Converted Adult Block + Strict Protocols (v3.0)
+// Cross-Platform Compatible (Windows, Linux, macOS)
 // Converted from GDI+ to Dear ImGui
-// Compatible with: ImGui 1.90+, MSVC / MinGW, Windows 7+
 
 #include "tab_adult.h"
-
 #include "imgui.h"
-#include "imgui_internal.h"  // for ImGui::PushItemFlag etc.
+#include "imgui_internal.h"
 
-#include <windows.h>
-#include <psapi.h>
-#include <tlhelp32.h>
-#include <uiautomation.h>
-#include <shlobj.h>
-#include <shlwapi.h>
-
+// Standard C++ Cross-Platform Headers
 #include <vector>
 #include <string>
 #include <algorithm>
@@ -23,8 +16,53 @@
 #include <codecvt>
 #include <locale>
 #include <ctime>
+#include <chrono>
+#include <filesystem>
+#include <cstdint>
+#include <cwctype>
+
+#ifdef _WIN32
+    #include <windows.h>
+    #include <psapi.h>
+    #include <tlhelp32.h>
+    #include <uiautomation.h>
+    #include <shlobj.h>
+    #include <shlwapi.h>
+#else
+    // Placeholder headers for Linux/Mac equivalents
+    #include <unistd.h>
+    #include <sys/types.h>
+#endif
 
 using namespace std;
+namespace fs = std::filesystem;
+
+// ─── Cross-Platform Time & Path Helpers ───────────────────────
+inline uint64_t GetSystemTimeMs() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+inline void SleepMs(int ms) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+}
+
+static wstring GetBaseDirectory() {
+#ifdef _WIN32
+    wstring p = L"C:\\ProgramData\\RasFocus";
+    fs::create_directories(p);
+    SetFileAttributesW(p.c_str(), FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM);
+    return p;
+#elif defined(__APPLE__)
+    wstring p = L"/Users/Shared/RasFocus";
+    fs::create_directories(p);
+    return p;
+#else // Linux
+    wstring p = L"/var/opt/RasFocus";
+    fs::create_directories(p);
+    return p;
+#endif
+}
 
 // ─── Premium Feature Gate ─────────────────────────────────────
 bool g_isPremiumUser    = false;
@@ -46,7 +84,7 @@ static const ImVec4 ClrWhite       = {1.00f,  1.00f,  1.00f,  1.00f};
 
 // ─── Safe Browsing State ──────────────────────────────────────
 static bool isAdultFocusActive  = false;
-static ULONGLONG focusEndTime   = 0;
+static uint64_t focusEndTime    = 0;
 
 static int  controlMode         = 0;   // 0=Self, 1=Parents, 2=Long Text
 static int  adultReligion       = 0;   // 0=Muslim 1=Hindu 2=Christian 3=Universal
@@ -58,13 +96,13 @@ static bool cbHardcore   = true;
 static bool cbRomantic   = true;
 
 static bool cbPeriodicPopups     = false;
-static DWORD lastPeriodicPopupTime = 0;
+static uint64_t lastPeriodicPopupTime = 0;
 
 static bool cb24HourLock         = false;
-static ULONGLONG lock24hEndTime  = 0;
+static uint64_t lock24hEndTime   = 0;
 
 static bool isPanicActive        = false;
-static DWORD panicStartTime      = 0;
+static uint64_t panicStartTime   = 0;
 static int   totalBlockedAdultCount = 0;
 
 // ─── Strict Protocols State ───────────────────────────────────
@@ -75,7 +113,7 @@ static bool cbIncognito   = true;
 static bool cbStrictMode  = false;
 
 static bool isStrictFocusActive   = false;
-static ULONGLONG strictFocusEndTime = 0;
+static uint64_t strictFocusEndTime = 0;
 
 static bool strictSettingsLoaded = false;
 static bool adultThreadStarted   = false;
@@ -140,22 +178,21 @@ static vector<wstring> adultWebsites;
 
 // ─── File helpers ─────────────────────────────────────────────
 static wstring GetSaveFilePath() {
-    wstring p = L"C:\\ProgramData\\RasFocus";
-    CreateDirectoryW(p.c_str(), NULL);
-    SetFileAttributesW(p.c_str(), FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM);
-    return p + L"\\rf_sys_data.dat";
+    return GetBaseDirectory() + L"/rf_sys_data.dat";
 }
 static wstring GetStrictSaveFilePath() {
-    wstring p = L"C:\\ProgramData\\RasFocus";
-    CreateDirectoryW(p.c_str(), NULL);
-    SetFileAttributesW(p.c_str(), FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM);
-    return p + L"\\rf_strict_data.dat";
+    return GetBaseDirectory() + L"/rf_strict_data.dat";
 }
 
 // ─── Save / Load ──────────────────────────────────────────────
 static void SaveAdultSettings() {
     wstring fp = GetSaveFilePath();
+#ifdef _WIN32
     wofstream out(fp.c_str());
+#else
+    string u8path(fp.begin(), fp.end());
+    wofstream out(u8path);
+#endif
     out.imbue(locale(out.getloc(), new codecvt_utf8<wchar_t>));
     if (out.is_open()) {
         out << cbAdultWeb << L" " << cbFbReels << L" " << cbHardcore << L" " << cbRomantic << L"\n";
@@ -167,9 +204,15 @@ static void SaveAdultSettings() {
         out.close();
     }
 }
+
 static void SaveStrictSettings() {
     wstring fp = GetStrictSaveFilePath();
+#ifdef _WIN32
     wofstream out(fp.c_str());
+#else
+    string u8path(fp.begin(), fp.end());
+    wofstream out(u8path);
+#endif
     out.imbue(locale(out.getloc(), new codecvt_utf8<wchar_t>));
     if (out.is_open()) {
         out << cbSilentUrl << L" " << cbDnsFilter << L" " << cbSafeSearch << L" " << cbIncognito << L" " << cbStrictMode << L"\n";
@@ -180,6 +223,7 @@ static void SaveStrictSettings() {
 
 static vector<wstring> LoadAdultSitesFromResource() {
     vector<wstring> sites;
+#ifdef _WIN32
     HRSRC hRes = FindResource(NULL, MAKEINTRESOURCE(105), RT_RCDATA);
     if (!hRes) return sites;
     HGLOBAL hData = LoadResource(NULL, hRes);
@@ -193,6 +237,10 @@ static vector<wstring> LoadAdultSitesFromResource() {
             if (!line.empty()) sites.push_back(wstring(line.begin(), line.end()));
         }
     }
+#else
+    // Default list fallback for non-Windows platforms since Windows Resource files don't exist
+    sites = { L"pornhub.com", L"xvideos.com", L"xnxx.com", L"xhamster.com", L"redtube.com" };
+#endif
     return sites;
 }
 
@@ -203,16 +251,21 @@ static void LoadAdultSettings() {
             adultWebsites = { L"pornhub.com", L"xvideos.com", L"xnxx.com", L"xhamster.com", L"redtube.com" };
     }
     wstring fp = GetSaveFilePath();
+#ifdef _WIN32
     wifstream in(fp.c_str());
+#else
+    string u8path(fp.begin(), fp.end());
+    wifstream in(u8path);
+#endif
     in.imbue(locale(in.getloc(), new codecvt_utf8<wchar_t>));
     if (in.is_open()) {
         in >> cbAdultWeb >> cbFbReels >> cbHardcore >> cbRomantic;
         in >> controlMode >> adultReligion >> adultLanguage >> totalBlockedAdultCount;
         in >> cbPeriodicPopups >> cb24HourLock >> lock24hEndTime;
         in >> isAdultFocusActive >> focusEndTime;
-        if (cb24HourLock && GetTickCount64() >= lock24hEndTime) { cb24HourLock = false; isAdultFocusActive = false; }
+        if (cb24HourLock && GetSystemTimeMs() >= lock24hEndTime) { cb24HourLock = false; isAdultFocusActive = false; }
         else if (cb24HourLock) isAdultFocusActive = true;
-        if (isAdultFocusActive && controlMode == 0 && GetTickCount64() >= focusEndTime && !cb24HourLock) isAdultFocusActive = false;
+        if (isAdultFocusActive && controlMode == 0 && GetSystemTimeMs() >= focusEndTime && !cb24HourLock) isAdultFocusActive = false;
         size_t kSize = 0; in >> kSize; in.ignore();
         customAdultKeywords.clear();
         for (size_t i = 0; i < kSize; i++) {
@@ -225,12 +278,17 @@ static void LoadAdultSettings() {
 
 void LoadStrictSettings() {
     wstring fp = GetStrictSaveFilePath();
+#ifdef _WIN32
     wifstream in(fp.c_str());
+#else
+    string u8path(fp.begin(), fp.end());
+    wifstream in(u8path);
+#endif
     in.imbue(locale(in.getloc(), new codecvt_utf8<wchar_t>));
     if (in.is_open()) {
         in >> cbSilentUrl >> cbDnsFilter >> cbSafeSearch >> cbIncognito >> cbStrictMode;
         in >> isStrictFocusActive >> strictFocusEndTime;
-        if (isStrictFocusActive && GetTickCount64() >= strictFocusEndTime) isStrictFocusActive = false;
+        if (isStrictFocusActive && GetSystemTimeMs() >= strictFocusEndTime) isStrictFocusActive = false;
         in.close();
     }
 }
@@ -238,6 +296,7 @@ void LoadStrictSettings() {
 // ─── Popup Logic ──────────────────────────────────────────────
 struct PopupData { wstring quote; bool isFullScreen; };
 
+#ifdef _WIN32
 static LRESULT CALLBACK AdultPopupWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     if (msg == WM_PAINT) {
         PAINTSTRUCT ps; HDC hdc = BeginPaint(hwnd, &ps);
@@ -264,8 +323,10 @@ static LRESULT CALLBACK AdultPopupWndProc(HWND hwnd, UINT msg, WPARAM wParam, LP
     if (msg == WM_DESTROY) { PopupData* pd = (PopupData*)GetWindowLongPtr(hwnd, GWLP_USERDATA); if (pd) delete pd; }
     return DefWindowProc(hwnd, msg, wParam, lParam);
 }
+#endif
 
 static void SafePopupThread(wstring quote, bool fullScreen = false) {
+#ifdef _WIN32
     WNDCLASSW wc = {}; wc.lpfnWndProc = AdultPopupWndProc; wc.hInstance = GetModuleHandle(NULL);
     wc.lpszClassName = L"RasFocusAdultPopupClass"; wc.hbrBackground = (HBRUSH)GetStockObject(NULL_BRUSH);
     RegisterClassW(&wc);
@@ -282,9 +343,13 @@ static void SafePopupThread(wstring quote, bool fullScreen = false) {
         if (!fullScreen) SetTimer(hPopup, 2, 6000, NULL);
         MSG msg2; while (GetMessage(&msg2, NULL, 0, 0)) { TranslateMessage(&msg2); DispatchMessage(&msg2); }
     }
+#else
+    // Placeholder for Linux/Mac Popup implementation (e.g. using ImGui overlay or Zenity/osascript)
+    // C++ standard doesn't have native window creation.
+#endif
 }
 
-static wstring toLowerW_Logic(wstring s) { for (auto& c : s) c = towlower(c); return s; }
+static wstring toLowerW_Logic(wstring s) { for (auto& c : s) c = std::towlower(c); return s; }
 
 static void TriggerAdultPopup(bool isWarning = false, wstring customMsg = L"", bool isFullScreen = false) {
     if (!isFullScreen) { totalBlockedAdultCount++; SaveAdultSettings(); }
@@ -301,8 +366,12 @@ static void TriggerAdultPopup(bool isWarning = false, wstring customMsg = L"", b
 }
 
 static void closeActiveTab() {
+#ifdef _WIN32
     keybd_event(VK_CONTROL, 0, 0, 0); keybd_event('W', 0, 0, 0);
     keybd_event('W', 0, KEYEVENTF_KEYUP, 0); keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0);
+#else
+    // Cross-platform tab close requires specific display server calls (X11/Wayland/Quartz)
+#endif
 }
 
 // ─── Silent Monitor ───────────────────────────────────────────
@@ -313,12 +382,20 @@ static void LogSilentUrl(const wstring& windowTitle, const wstring& url) {
     time_t now = time(0); tm* ltm = localtime(&now); char ts[64];
     strftime(ts, sizeof(ts), "%Y-%m-%d %I:%M:%S %p", ltm);
     wstring wTs(ts, ts + strlen(ts));
-    wofstream out(L"C:\\ProgramData\\RasFocus\\silent_monitor_log.txt", ios::app);
+    
+    wstring logPath = GetBaseDirectory() + L"/silent_monitor_log.txt";
+#ifdef _WIN32
+    wofstream out(logPath.c_str(), ios::app);
+#else
+    string u8path(logPath.begin(), logPath.end());
+    wofstream out(u8path, ios::app);
+#endif
     out.imbue(locale(out.getloc(), new codecvt_utf8<wchar_t>));
     if (out.is_open()) { out << L"[" << wTs << L"] TITLE: " << windowTitle << L" | URL: " << url << L"\n"; out.close(); }
 }
 
 // ─── Keyboard Hook ────────────────────────────────────────────
+#ifdef _WIN32
 static HHOOK hKeyboardHook = NULL;
 static string globalKeyBuffer;
 
@@ -339,12 +416,19 @@ static LRESULT CALLBACK KeyboardHookProc(int nCode, WPARAM wParam, LPARAM lParam
     }
     return CallNextHookEx(hKeyboardHook, nCode, wParam, lParam);
 }
+#endif
+
 static void StartKeyloggerThread() {
+#ifdef _WIN32
     hKeyboardHook = SetWindowsHookEx(WH_KEYBOARD_LL, KeyboardHookProc, NULL, 0);
     MSG msg2; while (GetMessage(&msg2, NULL, 0, 0)) { TranslateMessage(&msg2); DispatchMessage(&msg2); }
+#else
+    // Keylogging on Linux requires reading /dev/input, on Mac requires Quartz Event Taps.
+#endif
 }
 
 // ─── UIA Browser URL ──────────────────────────────────────────
+#ifdef _WIN32
 static IUIAutomation* pAutomation = NULL;
 static wstring GetBrowserURL_Fallback(HWND hBrowser) {
     wstring url;
@@ -371,8 +455,10 @@ static wstring GetBrowserURL_Fallback(HWND hBrowser) {
     }
     return url;
 }
+#endif
 
 // ─── Registry Policy Helpers ──────────────────────────────────
+#ifdef _WIN32
 static void SetRegPolicy(HKEY hKeyRoot, const char* subKey, const char* valueName, DWORD data) {
     HKEY hKey;
     if (RegCreateKeyExA(hKeyRoot, subKey, 0, NULL, REG_OPTION_NON_VOLATILE, KEY_WRITE, NULL, &hKey, NULL) == ERROR_SUCCESS) {
@@ -386,17 +472,25 @@ static void RemoveRegPolicy(HKEY hKeyRoot, const char* subKey, const char* value
         RegDeleteValueA(hKey, valueName); RegCloseKey(hKey);
     }
 }
+#endif
 
 // ─── DNS / SafeSearch / Hosts ─────────────────────────────────
 static void SetFamilyDNS(bool enable) {
+#ifdef _WIN32
     SHELLEXECUTEINFOW sei = { sizeof(sei) }; sei.lpVerb = L"runas"; sei.lpFile = L"cmd.exe"; sei.nShow = SW_HIDE;
     wstring args = enable
         ? L"/c wmic nicconfig where (IPEnabled=TRUE) call SetDNSServerSearchOrder (\"1.1.1.3\", \"1.0.0.3\")"
         : L"/c wmic nicconfig where (IPEnabled=TRUE) call SetDNSServerSearchOrder ()";
     sei.lpParameters = args.c_str(); ShellExecuteExW(&sei);
     WinExec("ipconfig /flushdns", SW_HIDE);
+#else
+    // macOS: networksetup -setdnsservers
+    // Linux: resolvectl or /etc/resolv.conf modification
+#endif
 }
+
 static void ToggleSafeSearchViaBat(bool enable) {
+#ifdef _WIN32
     wchar_t tempPath[MAX_PATH]; GetTempPathW(MAX_PATH, tempPath);
     wstring batPath = wstring(tempPath) + L"RasFocus_SafeSearch.bat";
     wofstream batFile(batPath);
@@ -423,11 +517,19 @@ static void ToggleSafeSearchViaBat(bool enable) {
     SHELLEXECUTEINFOW sei = { sizeof(sei) }; sei.lpVerb = L"runas"; sei.lpFile = batPath.c_str();
     sei.nShow = SW_HIDE; sei.fMask = SEE_MASK_NOCLOSEPROCESS;
     if (ShellExecuteExW(&sei) && sei.hProcess) { WaitForSingleObject(sei.hProcess, INFINITE); CloseHandle(sei.hProcess); }
-    DeleteFileW(batPath.c_str());
+    _wremove(batPath.c_str());
+#endif
 }
+
 static void EnforceStrictProtocols() {
+#ifdef _WIN32
     string hp = "C:\\Windows\\System32\\drivers\\etc\\hosts";
     string tp = "C:\\Windows\\System32\\drivers\\etc\\hosts.temp";
+#else
+    string hp = "/etc/hosts";
+    string tp = "/tmp/hosts.temp";
+#endif
+
     ifstream fi(hp); ofstream fo(tp); string line; bool skip = false;
     if (fi.is_open() && fo.is_open()) {
         while (getline(fi, line)) {
@@ -454,6 +556,8 @@ static void EnforceStrictProtocols() {
     }
     fo.close();
     remove(hp.c_str()); rename(tp.c_str(), hp.c_str());
+
+#ifdef _WIN32
     WinExec("ipconfig /flushdns", SW_HIDE);
     if (cbSafeSearch) {
         SetRegPolicy(HKEY_LOCAL_MACHINE, "SOFTWARE\\Policies\\Google\\Chrome", "ForceGoogleSafeSearch", 1);
@@ -470,26 +574,31 @@ static void EnforceStrictProtocols() {
         RemoveRegPolicy(HKEY_LOCAL_MACHINE, "SOFTWARE\\Policies\\Microsoft\\Edge", "ForceYouTubeRestrict");
         RemoveRegPolicy(HKEY_LOCAL_MACHINE, "SOFTWARE\\Policies\\BraveSoftware\\Brave", "ForceGoogleSafeSearch");
     }
+#endif
 }
 
 // ─── Background Thread ────────────────────────────────────────
 static void AdultBackgroundThread() {
+#ifdef _WIN32
     CoInitializeEx(NULL, COINIT_MULTITHREADED);
     CoCreateInstance(CLSID_CUIAutomation, NULL, CLSCTX_INPROC_SERVER, IID_IUIAutomation, (void**)&pAutomation);
-    lastPeriodicPopupTime = GetTickCount();
+#endif
+    lastPeriodicPopupTime = GetSystemTimeMs();
     wstring lastTitle;
     while (true) {
         if (cb24HourLock) {
-            if (GetTickCount64() >= lock24hEndTime) { cb24HourLock = false; isAdultFocusActive = false; SaveAdultSettings(); }
+            if (GetSystemTimeMs() >= lock24hEndTime) { cb24HourLock = false; isAdultFocusActive = false; SaveAdultSettings(); }
             else isAdultFocusActive = true;
         }
-        if (isAdultFocusActive && controlMode == 0 && GetTickCount64() >= focusEndTime && !cb24HourLock) { isAdultFocusActive = false; SaveAdultSettings(); }
+        if (isAdultFocusActive && controlMode == 0 && GetSystemTimeMs() >= focusEndTime && !cb24HourLock) { isAdultFocusActive = false; SaveAdultSettings(); }
         if (cbPeriodicPopups && isAdultFocusActive) {
-            if (GetTickCount() - lastPeriodicPopupTime >= 25*60*1000) { TriggerAdultPopup(false, L"", true); lastPeriodicPopupTime = GetTickCount(); }
+            if (GetSystemTimeMs() - lastPeriodicPopupTime >= 25*60*1000) { TriggerAdultPopup(false, L"", true); lastPeriodicPopupTime = GetSystemTimeMs(); }
         }
-        if (isStrictFocusActive && GetTickCount64() >= strictFocusEndTime) { isStrictFocusActive = false; SaveStrictSettings(); }
+        if (isStrictFocusActive && GetSystemTimeMs() >= strictFocusEndTime) { isStrictFocusActive = false; SaveStrictSettings(); }
+        
+#ifdef _WIN32
         if (isPanicActive) {
-            if (GetTickCount() - panicStartTime < 15*60*1000) {
+            if (GetSystemTimeMs() - panicStartTime < 15*60*1000) {
                 HWND ha = GetForegroundWindow();
                 if (ha) { wchar_t t[256]; GetWindowTextW(ha, t, 256); wstring tl = toLowerW_Logic(t);
                     if (tl.find(L"chrome") != wstring::npos || tl.find(L"edge") != wstring::npos ||
@@ -526,12 +635,13 @@ static void AdultBackgroundThread() {
                         if (!ub && cbFbReels) { wstring lu = toLowerW_Logic(url);
                             if (lu.find(L"facebook.com/reel") != wstring::npos || lu.find(L"instagram.com/reels") != wstring::npos || lu.find(L"youtube.com/shorts") != wstring::npos) ub = true; }
                         if (cbSilentUrl && !ub) LogSilentUrl(title, url);
-                        if (ub) { closeActiveTab(); Sleep(280); TriggerAdultPopup(); lastTitle = L""; }
+                        if (ub) { closeActiveTab(); SleepMs(280); TriggerAdultPopup(); lastTitle = L""; }
                     }
                 }
             }
         }
-        Sleep(500);
+#endif
+        SleepMs(500);
     }
 }
 
@@ -545,7 +655,7 @@ static void InitAdultSystemOnBoot() {
 }
 
 struct AdultAutoStarter {
-    AdultAutoStarter() { thread t([](){ Sleep(1000); InitAdultSystemOnBoot(); }); t.detach(); }
+    AdultAutoStarter() { thread t([](){ SleepMs(1000); InitAdultSystemOnBoot(); }); t.detach(); }
 } g_adultAutoStarter;
 
 // ─── ImGui Helper: Toggle Switch ──────────────────────────────
@@ -620,10 +730,10 @@ void DrawAdultBlockTab() {
         char focusLabel[64] = "Safe Focus";
         if (isAdultFocusActive) {
             if (locked24) {
-                ULONGLONG left = lock24hEndTime > GetTickCount64() ? lock24hEndTime - GetTickCount64() : 0;
+                uint64_t left = lock24hEndTime > GetSystemTimeMs() ? lock24hEndTime - GetSystemTimeMs() : 0;
                 snprintf(focusLabel, sizeof(focusLabel), "Lock (%lluh %llum)##safefocus", left/3600000, (left%3600000)/60000);
             } else if (controlMode == 0) {
-                ULONGLONG left = focusEndTime > GetTickCount64() ? focusEndTime - GetTickCount64() : 0;
+                uint64_t left = focusEndTime > GetSystemTimeMs() ? focusEndTime - GetSystemTimeMs() : 0;
                 snprintf(focusLabel, sizeof(focusLabel), "Lock (%llum)##safefocus", (left/60000)+1);
             } else {
                 snprintf(focusLabel, sizeof(focusLabel), "Stop Focus##safefocus");
@@ -673,7 +783,7 @@ void DrawAdultBlockTab() {
         ImVec4 btnClr = isStrictFocusActive ? ClrRed : ClrGreen;
         char label[64] = "Strict Focus";
         if (isStrictFocusActive) {
-            ULONGLONG left = strictFocusEndTime > GetTickCount64() ? strictFocusEndTime - GetTickCount64() : 0;
+            uint64_t left = strictFocusEndTime > GetSystemTimeMs() ? strictFocusEndTime - GetSystemTimeMs() : 0;
             snprintf(label, sizeof(label), "Lock (%llum)##sf", (left/60000)+1);
         }
         if (ColorButton(label, btnClr, {120, 30})) {
@@ -689,7 +799,7 @@ void DrawAdultBlockTab() {
         ImVec4 btnClr = isPanicActive ? ClrOrange : ClrRed;
         if (ColorButton(isPanicActive ? "Panic Active##panic" : "Panic Mode##panic", btnClr, {110, 30})) {
             if (!g_isPremiumUser) { g_showUpgradePopup = true; }
-            else { isPanicActive = true; panicStartTime = GetTickCount(); }
+            else { isPanicActive = true; panicStartTime = GetSystemTimeMs(); }
         }
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Emergency! Instantly kills all web\nbrowsers for the next 15 minutes.");
     }
@@ -759,11 +869,11 @@ void DrawAdultBlockTab() {
 
     struct StrictCard { const char* icon; const char* title; const char* desc; bool* state; const char* tooltip; bool isPremium; };
     StrictCard cards[] = {
-        {"[URL]",  "Silent Monitor",   "Log & detect URLs.",        &cbSilentUrl,  "Saves visited URLs in a hidden text file:\nC:\\ProgramData\\RasFocus\\silent_monitor_log.txt", true},
+        {"[URL]",  "Silent Monitor",   "Log & detect URLs.",        &cbSilentUrl,  "Saves visited URLs in a hidden text file.", true},
         {"[DNS]",  "Family DNS",       "Cloudflare safe DNS.",      &cbDnsFilter,  "Forces Cloudflare 1.1.1.3 DNS to filter\nadult websites at the network level.",              true},
-        {"[SCH]",  "Safe Search",      "Force web SafeSearch.",     &cbSafeSearch, "Enforces SafeSearch via Windows Hosts\nfile and Browser Registry Policies.",                 true},
+        {"[SCH]",  "Safe Search",      "Force web SafeSearch.",     &cbSafeSearch, "Enforces SafeSearch via Hosts\nfile and Browser Policies.",                 true},
         {"[INC]",  "Block Incognito",  "Close private windows.",    &cbIncognito,  "Automatically detects and closes any\nIncognito or InPrivate browser window.",               true},
-        {"[LCK]",  "Strict Lock Mode", "Block TaskMgr & Regedit.", &cbStrictMode, "Locks Task Manager, Control Panel,\nand Registry to prevent bypassing.",                    true},
+        {"[LCK]",  "Strict Lock Mode", "Block TaskMgr & Regedit.",  &cbStrictMode, "Locks Task Manager, Control Panel,\nand Registry to prevent bypassing.",                    true},
     };
 
     // Draw cards in a 2-wide grid
@@ -792,7 +902,12 @@ void DrawAdultBlockTab() {
             else {
                 *cards[i].state = newState;
                 if (cards[i].state == &cbDnsFilter)  { SetFamilyDNS(cbDnsFilter); EnforceStrictProtocols(); }
-                if (cards[i].state == &cbSafeSearch) { ToggleSafeSearchViaBat(cbSafeSearch); if(!cbSafeSearch){ int r=MessageBox(NULL,"Close browsers to apply changes?","RasFocus",MB_YESNO|MB_ICONQUESTION); if(r==IDYES){ system("taskkill /F /IM chrome.exe /T >nul 2>&1"); system("taskkill /F /IM msedge.exe /T >nul 2>&1"); system("taskkill /F /IM brave.exe /T >nul 2>&1"); } } }
+                if (cards[i].state == &cbSafeSearch) { 
+                    ToggleSafeSearchViaBat(cbSafeSearch); 
+#ifdef _WIN32
+                    if(!cbSafeSearch){ int r=MessageBoxA(NULL,"Close browsers to apply changes?","RasFocus",MB_YESNO|MB_ICONQUESTION); if(r==IDYES){ system("taskkill /F /IM chrome.exe /T >nul 2>&1"); system("taskkill /F /IM msedge.exe /T >nul 2>&1"); system("taskkill /F /IM brave.exe /T >nul 2>&1"); } }
+#endif
+                }
                 SaveStrictSettings();
             }
         }
@@ -822,8 +937,12 @@ void DrawAdultBlockTab() {
         if (v24 && !cb24HourLock) {
             if (!g_isPremiumUser) { g_showUpgradePopup = true; }
             else {
-                int r = MessageBox(NULL, "This locks for 24 hours and CANNOT be undone. Proceed?", "24h Lock", MB_YESNO|MB_ICONWARNING);
-                if (r == IDYES) { cb24HourLock = true; isAdultFocusActive = true; lock24hEndTime = GetTickCount64() + 86400000ULL; SaveAdultSettings(); }
+#ifdef _WIN32
+                int r = MessageBoxA(NULL, "This locks for 24 hours and CANNOT be undone. Proceed?", "24h Lock", MB_YESNO|MB_ICONWARNING);
+                if (r == IDYES) { cb24HourLock = true; isAdultFocusActive = true; lock24hEndTime = GetSystemTimeMs() + 86400000ULL; SaveAdultSettings(); }
+#else
+                cb24HourLock = true; isAdultFocusActive = true; lock24hEndTime = GetSystemTimeMs() + 86400000ULL; SaveAdultSettings();
+#endif
             }
         }
     } else {
@@ -833,7 +952,7 @@ void DrawAdultBlockTab() {
     }
     ImGui::TextDisabled("Cannot be undone.");
     if (cb24HourLock) {
-        ULONGLONG left = lock24hEndTime > GetTickCount64() ? lock24hEndTime - GetTickCount64() : 0;
+        uint64_t left = lock24hEndTime > GetSystemTimeMs() ? lock24hEndTime - GetSystemTimeMs() : 0;
         char rem[64]; snprintf(rem, sizeof(rem), "%lluh %llum left", left/3600000, (left%3600000)/60000);
         ImGui::TextColored(ClrTeal, "%s", rem);
     }
@@ -905,8 +1024,8 @@ void DrawAdultBlockTab() {
             if (ImGui::Button("Cancel##tovc", {140,36})) { showTimeOverlay = showStrictTimeOverlay = false; }
             ImGui::SameLine();
             if (ColorButton("Start Focus##tovs", ClrTeal, {160,36})) {
-                if (showTimeOverlay) { isAdultFocusActive = true; focusEndTime = GetTickCount64() + (ULONGLONG)hrs*3600000 + (ULONGLONG)mns*60000; showTimeOverlay = false; SaveAdultSettings(); }
-                else { isStrictFocusActive = true; strictFocusEndTime = GetTickCount64() + (ULONGLONG)hrs*3600000 + (ULONGLONG)mns*60000; showStrictTimeOverlay = false; SaveStrictSettings(); }
+                if (showTimeOverlay) { isAdultFocusActive = true; focusEndTime = GetSystemTimeMs() + (uint64_t)hrs*3600000 + (uint64_t)mns*60000; showTimeOverlay = false; SaveAdultSettings(); }
+                else { isStrictFocusActive = true; strictFocusEndTime = GetSystemTimeMs() + (uint64_t)hrs*3600000 + (uint64_t)mns*60000; showStrictTimeOverlay = false; SaveStrictSettings(); }
             }
         } else if (showPassOverlay) {
             ImGui::TextColored(ClrTeal, isStoppingFocus ? "Enter Password to Stop" : "Enter Parents' Password");

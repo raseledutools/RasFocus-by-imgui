@@ -1,51 +1,63 @@
-name: Windows Build (MSVC)
+name: Cross-Platform Build
 
 on:
   push:
-    branches: [ "main", "master" ]
+    branches: [ "main" ]
   pull_request:
-    branches: [ "main", "master" ]
-  workflow_dispatch:
+    branches: [ "main" ]
+  workflow_dispatch: # আপনাকে ম্যানুয়ালি অ্যাকশনটি রান করার সুবিধা দেবে
 
 jobs:
   build:
-    name: Build on Windows (MSVC x64)
-    runs-on: windows-latest
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    
+    # ম্যাট্রিক্স স্ট্র্যাটেজি: একসাথে তিনটি OS-এ বিল্ড চালাবে
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
 
     steps:
-      # ── 1. Checkout ────────────────────────────────────────────
-      - name: Checkout repository
-        uses: actions/checkout@v4
+    - name: Checkout Repository
+      uses: actions/checkout@v4
 
-      # ── 2. MSVC x64 environment ────────────────────────────────
-      - name: Set up MSVC (Developer Command Prompt)
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
+    # লিনাক্সের জন্য প্রয়োজনীয় গ্রাফিক্স লাইব্রেরি ইনস্টল করা
+    - name: Install Linux Dependencies
+      if: runner.os == 'Linux'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libx11-dev libgl1-mesa-dev libxcursor-dev libxi-dev libxinerama-dev libxrandr-dev
 
-      # ── 3. Cache CMake / FetchContent (ImGui) ──────────────────
-      - name: Cache CMake build directory
-        uses: actions/cache@v4
-        with:
-          path: build
-          key: ${{ runner.os }}-cmake-${{ hashFiles('CMakeLists.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-cmake-
+    # CMake কনফিগার করা
+    - name: Configure CMake
+      run: cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
 
-      # ── 4. Configure ───────────────────────────────────────────
-      - name: Configure CMake
-        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release
-        shell: cmd
+    # রিলিজ মোডে বিল্ড করা
+    - name: Build
+      run: cmake --build build --config Release
 
-      # ── 5. Build ───────────────────────────────────────────────
-      - name: Build
-        run: cmake --build build --config Release --parallel
-        shell: cmd
+    # উইন্ডোজের জন্য .exe ফাইল আপলোড করা
+    - name: Upload Windows Artifact
+      if: runner.os == 'Windows'
+      uses: actions/upload-artifact@v4
+      with:
+        name: RasFocus-Windows
+        path: build/Release/RasFocus.exe
 
-      # ── 6. Upload .exe artifact ────────────────────────────────
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: RasFocus-Release-x64
-          path: build/Release/RasFocus.exe
-          if-no-files-found: warn
+    # লিনাক্সের জন্য বাইনারি ফাইল আপলোড করা
+    - name: Upload Linux Artifact
+      if: runner.os == 'Linux'
+      uses: actions/upload-artifact@v4
+      with:
+        name: RasFocus-Linux
+        path: build/RasFocus
+
+    # ম্যাকের (macOS) জন্য বাইনারি ফাইল আপলোড করা
+    - name: Upload macOS Artifact
+      if: runner.os == 'macOS'
+      uses: actions/upload-artifact@v4
+      with:
+        name: RasFocus-macOS
+        # ম্যাকের ক্ষেত্রে এটি .app বান্ডেল হতে পারে, তাই পুরো ডিরেক্টরি আপলোড করা হলো
+        path: build/RasFocus*
