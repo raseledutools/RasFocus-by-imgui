@@ -35,6 +35,9 @@
 #include <cstdint>
 #include <cwctype>
 #include <cinttypes>   // PRIu64 — portable printf format macro for uint64_t
+#include <cstring>     // memset, strlen, strftime
+#include <cstdlib>     // srand, rand, system
+#include <cstdio>      // _wremove, snprintf
 
 #ifndef _WIN32
     #include <unistd.h>
@@ -376,10 +379,10 @@ static void TriggerAdultPopup(bool isWarning = false, wstring customMsg = L"", b
     if (isWarning) { finalQuote = customMsg; }
     else {
         int idx = 0;
-        if (adultReligion == 0) { idx = rand() % muslimQuotes.size(); finalQuote = (adultLanguage == 0) ? muslimQuotes[idx].bn : muslimQuotes[idx].en; }
-        else if (adultReligion == 1) { idx = rand() % hinduQuotes.size(); finalQuote = (adultLanguage == 0) ? hinduQuotes[idx].bn : hinduQuotes[idx].en; }
-        else if (adultReligion == 2) { idx = rand() % christianQuotes.size(); finalQuote = (adultLanguage == 0) ? christianQuotes[idx].bn : christianQuotes[idx].en; }
-        else { idx = rand() % universalQuotes.size(); finalQuote = (adultLanguage == 0) ? universalQuotes[idx].bn : universalQuotes[idx].en; }
+        if (adultReligion == 0) { idx = rand() % static_cast<int>(muslimQuotes.size()); finalQuote = (adultLanguage == 0) ? muslimQuotes[idx].bn : muslimQuotes[idx].en; }
+        else if (adultReligion == 1) { idx = rand() % static_cast<int>(hinduQuotes.size()); finalQuote = (adultLanguage == 0) ? hinduQuotes[idx].bn : hinduQuotes[idx].en; }
+        else if (adultReligion == 2) { idx = rand() % static_cast<int>(christianQuotes.size()); finalQuote = (adultLanguage == 0) ? christianQuotes[idx].bn : christianQuotes[idx].en; }
+        else { idx = rand() % static_cast<int>(universalQuotes.size()); finalQuote = (adultLanguage == 0) ? universalQuotes[idx].bn : universalQuotes[idx].en; }
     }
     thread t(SafePopupThread, finalQuote, isFullScreen); t.detach();
 }
@@ -427,7 +430,11 @@ static LRESULT CALLBACK KeyboardHookProc(int nCode, WPARAM wParam, LPARAM lParam
     if (nCode >= 0 && wParam == WM_KEYDOWN && !isPanicActive) {
         KBDLLHOOKSTRUCT* ks = (KBDLLHOOKSTRUCT*)lParam; DWORD vk = ks->vkCode;
         if ((vk >= 'A' && vk <= 'Z') || (vk >= '0' && vk <= '9') || vk == VK_SPACE || vk == VK_OEM_PERIOD) {
-            char c = (vk == VK_OEM_PERIOD) ? '.' : tolower(MapVirtualKey(vk, MAPVK_VK_TO_CHAR));
+            // Cast MapVirtualKey result through unsigned char to avoid C4244 truncation
+            // and tolower UB when char is negative (signed)
+            char c = (vk == VK_OEM_PERIOD)
+                ? '.'
+                : static_cast<char>(tolower(static_cast<unsigned char>(MapVirtualKey(vk, MAPVK_VK_TO_CHAR) & 0xFF)));
             globalKeyBuffer += c;
             if (globalKeyBuffer.length() > 100) globalKeyBuffer.erase(0, 1);
             wstring wb(globalKeyBuffer.begin(), globalKeyBuffer.end()); bool block = false;
@@ -506,7 +513,9 @@ static void SetFamilyDNS(bool enable) {
         ? L"/c wmic nicconfig where (IPEnabled=TRUE) call SetDNSServerSearchOrder (\"1.1.1.3\", \"1.0.0.3\")"
         : L"/c wmic nicconfig where (IPEnabled=TRUE) call SetDNSServerSearchOrder ()";
     sei.lpParameters = args.c_str(); ShellExecuteExW(&sei);
-    WinExec("ipconfig /flushdns", SW_HIDE);
+    { SHELLEXECUTEINFOA _sei{}; _sei.cbSize=sizeof(_sei); _sei.lpVerb="open";
+      _sei.lpFile="cmd.exe"; _sei.lpParameters="/c ipconfig /flushdns >nul 2>&1";
+      _sei.nShow=SW_HIDE; ShellExecuteExA(&_sei); }
 #else
     // macOS: networksetup -setdnsservers
     // Linux: resolvectl or /etc/resolv.conf modification
@@ -582,7 +591,9 @@ static void EnforceStrictProtocols() {
     ::remove(hp.c_str()); ::rename(tp.c_str(), hp.c_str());
 
 #ifdef _WIN32
-    WinExec("ipconfig /flushdns", SW_HIDE);
+    { SHELLEXECUTEINFOA _sei{}; _sei.cbSize=sizeof(_sei); _sei.lpVerb="open";
+      _sei.lpFile="cmd.exe"; _sei.lpParameters="/c ipconfig /flushdns >nul 2>&1";
+      _sei.nShow=SW_HIDE; ShellExecuteExA(&_sei); }
     if (cbSafeSearch) {
         SetRegPolicy(HKEY_LOCAL_MACHINE, "SOFTWARE\\Policies\\Google\\Chrome", "ForceGoogleSafeSearch", 1);
         SetRegPolicy(HKEY_LOCAL_MACHINE, "SOFTWARE\\Policies\\Google\\Chrome", "ForceYouTubeRestrict", 2);
@@ -873,7 +884,14 @@ void DrawAdultBlockTab() {
     } else {
         for (int i = 0; i < (int)customAdultKeywords.size(); i++) {
             wstring& wn = customAdultKeywords[i].name;
-            string n(wn.begin(), wn.end());
+            // Convert wstring to UTF-8 string for ImGui (avoids wchar_t->char narrowing)
+            string n;
+#ifdef _WIN32
+            { int sz = WideCharToMultiByte(CP_UTF8, 0, wn.c_str(), -1, nullptr, 0, nullptr, nullptr);
+              if (sz > 0) { n.resize(sz - 1); WideCharToMultiByte(CP_UTF8, 0, wn.c_str(), -1, &n[0], sz, nullptr, nullptr); } }
+#else
+            n.assign(wn.begin(), wn.end());
+#endif
             ImGui::Text("%s", n.c_str());
             if (!locked) {
                 ImGui::SameLine(340);
@@ -930,7 +948,14 @@ void DrawAdultBlockTab() {
                 if (cards[i].state == &cbSafeSearch) { 
                     ToggleSafeSearchViaBat(cbSafeSearch); 
 #ifdef _WIN32
-                    if(!cbSafeSearch){ int r=MessageBoxA(NULL,"Close browsers to apply changes?","RasFocus",MB_YESNO|MB_ICONQUESTION); if(r==IDYES){ system("taskkill /F /IM chrome.exe /T >nul 2>&1"); system("taskkill /F /IM msedge.exe /T >nul 2>&1"); system("taskkill /F /IM brave.exe /T >nul 2>&1"); } }
+                    if(!cbSafeSearch){ int r=MessageBoxA(NULL,"Close browsers to apply changes?","RasFocus",MB_YESNO|MB_ICONQUESTION); if(r==IDYES){ // Use ShellExecuteA instead of system() to avoid C4996 deprecation warning
+                        auto _kill = [](const char* exe){
+                            char cmd[128]; snprintf(cmd, sizeof(cmd), "/c taskkill /F /IM %s /T >nul 2>&1", exe);
+                            SHELLEXECUTEINFOA _si{}; _si.cbSize=sizeof(_si);
+                            _si.lpFile="cmd.exe"; _si.lpParameters=cmd; _si.nShow=SW_HIDE;
+                            ShellExecuteExA(&_si);
+                        };
+                        _kill("chrome.exe"); _kill("msedge.exe"); _kill("brave.exe"); } }
 #endif
                 }
                 SaveStrictSettings();
