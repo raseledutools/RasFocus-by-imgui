@@ -32,14 +32,22 @@ target_include_directories(imgui_lib PUBLIC
 # ── Minimal Cross-Platform stub ────────────────────────────────
 set(STUB_MAIN "${CMAKE_CURRENT_BINARY_DIR}/stub_main.cpp")
 if(WIN32)
-    # Windows entry point
+    # Windows entry point — also defines the extern globals from tab_adult.h
     file(WRITE "${STUB_MAIN}" [[
 #include <windows.h>
+// Definitions for extern variables declared in tab_adult.h
+bool g_isPremiumUser        = false;
+bool g_showUpgradePopup     = false;
+bool g_parentForceAdultBlock = false;
 int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) { return 0; }
 ]])
 else()
-    # Standard entry point for Linux/Mac
+    # Standard entry point for Linux/Mac — also defines the extern globals from tab_adult.h
     file(WRITE "${STUB_MAIN}" [[
+// Definitions for extern variables declared in tab_adult.h
+bool g_isPremiumUser        = false;
+bool g_showUpgradePopup     = false;
+bool g_parentForceAdultBlock = false;
 int main(int argc, char** argv) { return 0; }
 ]])
 endif()
