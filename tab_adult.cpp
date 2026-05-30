@@ -2,6 +2,21 @@
 // Cross-Platform Compatible (Windows, Linux, macOS)
 // Converted from GDI+ to Dear ImGui
 
+// ── Windows headers must come FIRST, before any lean-macro redefinitions ─────
+#ifdef _WIN32
+    // WIN32_LEAN_AND_MEAN (set by CMake) strips oleacc.h and uiautomation.h.
+    // Undefine it locally so the accessibility headers compile cleanly.
+    #undef WIN32_LEAN_AND_MEAN
+    #include <windows.h>
+    #include <psapi.h>
+    #include <tlhelp32.h>
+    #include <oleacc.h>       // Must precede uiautomation.h: fixes UIAutomationCore.h
+                              // forward-declaration conflict on Windows SDK 10.0.26100+
+    #include <uiautomation.h>
+    #include <shlobj.h>
+    #include <shlwapi.h>
+#endif
+
 #include "tab_adult.h"
 #include "imgui.h"
 #include "imgui_internal.h"
@@ -13,26 +28,33 @@
 #include <thread>
 #include <fstream>
 #include <sstream>
-#include <codecvt>
 #include <locale>
 #include <ctime>
 #include <chrono>
 #include <filesystem>
 #include <cstdint>
 #include <cwctype>
+#include <cinttypes>   // PRIu64 — portable printf format macro for uint64_t
+#include <cstring>     // memset, strlen, strftime
+#include <cstdlib>     // srand, rand, system
+#include <cstdio>      // _wremove, snprintf
 
-#ifdef _WIN32
-    #include <windows.h>
-    #include <psapi.h>
-    #include <tlhelp32.h>
-    #include <uiautomation.h>
-    #include <shlobj.h>
-    #include <shlwapi.h>
-#else
-    // Placeholder headers for Linux/Mac equivalents
+#ifndef _WIN32
     #include <unistd.h>
     #include <sys/types.h>
 #endif
+
+// codecvt_utf8 is deprecated in C++17 and removed in C++26.
+// Provide a portable UTF-8 locale helper instead.
+namespace detail {
+    inline std::locale utf8_locale() {
+#ifdef _WIN32
+        try { return std::locale(".UTF-8"); } catch (...) {}
+#endif
+        try { return std::locale(""); } catch (...) {}
+        return std::locale::classic();
+    }
+}
 
 using namespace std;
 namespace fs = std::filesystem;
@@ -193,7 +215,7 @@ static void SaveAdultSettings() {
     string u8path(fp.begin(), fp.end());
     wofstream out(u8path);
 #endif
-    out.imbue(locale(out.getloc(), new codecvt_utf8<wchar_t>));
+    out.imbue(detail::utf8_locale());
     if (out.is_open()) {
         out << cbAdultWeb << L" " << cbFbReels << L" " << cbHardcore << L" " << cbRomantic << L"\n";
         out << controlMode << L" " << adultReligion << L" " << adultLanguage << L" " << totalBlockedAdultCount << L"\n";
@@ -213,7 +235,7 @@ static void SaveStrictSettings() {
     string u8path(fp.begin(), fp.end());
     wofstream out(u8path);
 #endif
-    out.imbue(locale(out.getloc(), new codecvt_utf8<wchar_t>));
+    out.imbue(detail::utf8_locale());
     if (out.is_open()) {
         out << cbSilentUrl << L" " << cbDnsFilter << L" " << cbSafeSearch << L" " << cbIncognito << L" " << cbStrictMode << L"\n";
         out << isStrictFocusActive << L" " << strictFocusEndTime << L"\n";
@@ -257,7 +279,7 @@ static void LoadAdultSettings() {
     string u8path(fp.begin(), fp.end());
     wifstream in(u8path);
 #endif
-    in.imbue(locale(in.getloc(), new codecvt_utf8<wchar_t>));
+    in.imbue(detail::utf8_locale());
     if (in.is_open()) {
         in >> cbAdultWeb >> cbFbReels >> cbHardcore >> cbRomantic;
         in >> controlMode >> adultReligion >> adultLanguage >> totalBlockedAdultCount;
@@ -284,7 +306,7 @@ void LoadStrictSettings() {
     string u8path(fp.begin(), fp.end());
     wifstream in(u8path);
 #endif
-    in.imbue(locale(in.getloc(), new codecvt_utf8<wchar_t>));
+    in.imbue(detail::utf8_locale());
     if (in.is_open()) {
         in >> cbSilentUrl >> cbDnsFilter >> cbSafeSearch >> cbIncognito >> cbStrictMode;
         in >> isStrictFocusActive >> strictFocusEndTime;
@@ -357,10 +379,10 @@ static void TriggerAdultPopup(bool isWarning = false, wstring customMsg = L"", b
     if (isWarning) { finalQuote = customMsg; }
     else {
         int idx = 0;
-        if (adultReligion == 0) { idx = rand() % muslimQuotes.size(); finalQuote = (adultLanguage == 0) ? muslimQuotes[idx].bn : muslimQuotes[idx].en; }
-        else if (adultReligion == 1) { idx = rand() % hinduQuotes.size(); finalQuote = (adultLanguage == 0) ? hinduQuotes[idx].bn : hinduQuotes[idx].en; }
-        else if (adultReligion == 2) { idx = rand() % christianQuotes.size(); finalQuote = (adultLanguage == 0) ? christianQuotes[idx].bn : christianQuotes[idx].en; }
-        else { idx = rand() % universalQuotes.size(); finalQuote = (adultLanguage == 0) ? universalQuotes[idx].bn : universalQuotes[idx].en; }
+        if (adultReligion == 0) { idx = rand() % static_cast<int>(muslimQuotes.size()); finalQuote = (adultLanguage == 0) ? muslimQuotes[idx].bn : muslimQuotes[idx].en; }
+        else if (adultReligion == 1) { idx = rand() % static_cast<int>(hinduQuotes.size()); finalQuote = (adultLanguage == 0) ? hinduQuotes[idx].bn : hinduQuotes[idx].en; }
+        else if (adultReligion == 2) { idx = rand() % static_cast<int>(christianQuotes.size()); finalQuote = (adultLanguage == 0) ? christianQuotes[idx].bn : christianQuotes[idx].en; }
+        else { idx = rand() % static_cast<int>(universalQuotes.size()); finalQuote = (adultLanguage == 0) ? universalQuotes[idx].bn : universalQuotes[idx].en; }
     }
     thread t(SafePopupThread, finalQuote, isFullScreen); t.detach();
 }
@@ -379,8 +401,13 @@ static wstring lastLoggedUrl;
 static void LogSilentUrl(const wstring& windowTitle, const wstring& url) {
     if (url.empty() || url == lastLoggedUrl) return;
     lastLoggedUrl = url;
-    time_t now = time(0); tm* ltm = localtime(&now); char ts[64];
-    strftime(ts, sizeof(ts), "%Y-%m-%d %I:%M:%S %p", ltm);
+    time_t now = time(0); tm tm_buf{}; char ts[64];
+#ifdef _WIN32
+    localtime_s(&tm_buf, &now);  // MSVC safe version
+#else
+    localtime_r(&now, &tm_buf);  // POSIX safe version
+#endif
+    strftime(ts, sizeof(ts), "%Y-%m-%d %I:%M:%S %p", &tm_buf);
     wstring wTs(ts, ts + strlen(ts));
     
     wstring logPath = GetBaseDirectory() + L"/silent_monitor_log.txt";
@@ -390,7 +417,7 @@ static void LogSilentUrl(const wstring& windowTitle, const wstring& url) {
     string u8path(logPath.begin(), logPath.end());
     wofstream out(u8path, ios::app);
 #endif
-    out.imbue(locale(out.getloc(), new codecvt_utf8<wchar_t>));
+    out.imbue(detail::utf8_locale());
     if (out.is_open()) { out << L"[" << wTs << L"] TITLE: " << windowTitle << L" | URL: " << url << L"\n"; out.close(); }
 }
 
@@ -403,7 +430,11 @@ static LRESULT CALLBACK KeyboardHookProc(int nCode, WPARAM wParam, LPARAM lParam
     if (nCode >= 0 && wParam == WM_KEYDOWN && !isPanicActive) {
         KBDLLHOOKSTRUCT* ks = (KBDLLHOOKSTRUCT*)lParam; DWORD vk = ks->vkCode;
         if ((vk >= 'A' && vk <= 'Z') || (vk >= '0' && vk <= '9') || vk == VK_SPACE || vk == VK_OEM_PERIOD) {
-            char c = (vk == VK_OEM_PERIOD) ? '.' : tolower(MapVirtualKey(vk, MAPVK_VK_TO_CHAR));
+            // Cast MapVirtualKey result through unsigned char to avoid C4244 truncation
+            // and tolower UB when char is negative (signed)
+            char c = (vk == VK_OEM_PERIOD)
+                ? '.'
+                : static_cast<char>(tolower(static_cast<unsigned char>(MapVirtualKey(vk, MAPVK_VK_TO_CHAR) & 0xFF)));
             globalKeyBuffer += c;
             if (globalKeyBuffer.length() > 100) globalKeyBuffer.erase(0, 1);
             wstring wb(globalKeyBuffer.begin(), globalKeyBuffer.end()); bool block = false;
@@ -482,7 +513,9 @@ static void SetFamilyDNS(bool enable) {
         ? L"/c wmic nicconfig where (IPEnabled=TRUE) call SetDNSServerSearchOrder (\"1.1.1.3\", \"1.0.0.3\")"
         : L"/c wmic nicconfig where (IPEnabled=TRUE) call SetDNSServerSearchOrder ()";
     sei.lpParameters = args.c_str(); ShellExecuteExW(&sei);
-    WinExec("ipconfig /flushdns", SW_HIDE);
+    { SHELLEXECUTEINFOA _sei{}; _sei.cbSize=sizeof(_sei); _sei.lpVerb="open";
+      _sei.lpFile="cmd.exe"; _sei.lpParameters="/c ipconfig /flushdns >nul 2>&1";
+      _sei.nShow=SW_HIDE; ShellExecuteExA(&_sei); }
 #else
     // macOS: networksetup -setdnsservers
     // Linux: resolvectl or /etc/resolv.conf modification
@@ -494,7 +527,7 @@ static void ToggleSafeSearchViaBat(bool enable) {
     wchar_t tempPath[MAX_PATH]; GetTempPathW(MAX_PATH, tempPath);
     wstring batPath = wstring(tempPath) + L"RasFocus_SafeSearch.bat";
     wofstream batFile(batPath);
-    batFile.imbue(locale(batFile.getloc(), new codecvt_utf8<wchar_t>));
+    batFile.imbue(detail::utf8_locale());
     if (!batFile.is_open()) return;
     batFile << L"@echo off\r\n";
     if (enable) {
@@ -555,10 +588,12 @@ static void EnforceStrictProtocols() {
         fo << "# RasFocus Strict End\n";
     }
     fo.close();
-    remove(hp.c_str()); rename(tp.c_str(), hp.c_str());
+    ::remove(hp.c_str()); ::rename(tp.c_str(), hp.c_str());
 
 #ifdef _WIN32
-    WinExec("ipconfig /flushdns", SW_HIDE);
+    { SHELLEXECUTEINFOA _sei{}; _sei.cbSize=sizeof(_sei); _sei.lpVerb="open";
+      _sei.lpFile="cmd.exe"; _sei.lpParameters="/c ipconfig /flushdns >nul 2>&1";
+      _sei.nShow=SW_HIDE; ShellExecuteExA(&_sei); }
     if (cbSafeSearch) {
         SetRegPolicy(HKEY_LOCAL_MACHINE, "SOFTWARE\\Policies\\Google\\Chrome", "ForceGoogleSafeSearch", 1);
         SetRegPolicy(HKEY_LOCAL_MACHINE, "SOFTWARE\\Policies\\Google\\Chrome", "ForceYouTubeRestrict", 2);
@@ -647,6 +682,7 @@ static void AdultBackgroundThread() {
 
 static void InitAdultSystemOnBoot() {
     if (!adultThreadStarted) {
+        srand(static_cast<unsigned int>(time(nullptr)));  // seed RNG for quote selection
         LoadAdultSettings(); LoadStrictSettings();
         thread t(AdultBackgroundThread); t.detach();
         thread kl(StartKeyloggerThread); kl.detach();
@@ -731,10 +767,10 @@ void DrawAdultBlockTab() {
         if (isAdultFocusActive) {
             if (locked24) {
                 uint64_t left = lock24hEndTime > GetSystemTimeMs() ? lock24hEndTime - GetSystemTimeMs() : 0;
-                snprintf(focusLabel, sizeof(focusLabel), "Lock (%lluh %llum)##safefocus", left/3600000, (left%3600000)/60000);
+                snprintf(focusLabel, sizeof(focusLabel), "Lock (%" PRIu64 "h %" PRIu64 "m)##safefocus", left/3600000, (left%3600000)/60000);
             } else if (controlMode == 0) {
                 uint64_t left = focusEndTime > GetSystemTimeMs() ? focusEndTime - GetSystemTimeMs() : 0;
-                snprintf(focusLabel, sizeof(focusLabel), "Lock (%llum)##safefocus", (left/60000)+1);
+                snprintf(focusLabel, sizeof(focusLabel), "Lock (%" PRIu64 "m)##safefocus", (left/60000)+1);
             } else {
                 snprintf(focusLabel, sizeof(focusLabel), "Stop Focus##safefocus");
             }
@@ -784,7 +820,7 @@ void DrawAdultBlockTab() {
         char label[64] = "Strict Focus";
         if (isStrictFocusActive) {
             uint64_t left = strictFocusEndTime > GetSystemTimeMs() ? strictFocusEndTime - GetSystemTimeMs() : 0;
-            snprintf(label, sizeof(label), "Lock (%llum)##sf", (left/60000)+1);
+            snprintf(label, sizeof(label), "Lock (%" PRIu64 "m)##sf", (left/60000)+1);
         }
         if (ColorButton(label, btnClr, {120, 30})) {
             if (!g_isPremiumUser) { g_showUpgradePopup = true; }
@@ -848,7 +884,14 @@ void DrawAdultBlockTab() {
     } else {
         for (int i = 0; i < (int)customAdultKeywords.size(); i++) {
             wstring& wn = customAdultKeywords[i].name;
-            string n(wn.begin(), wn.end());
+            // Convert wstring to UTF-8 string for ImGui (avoids wchar_t->char narrowing)
+            string n;
+#ifdef _WIN32
+            { int sz = WideCharToMultiByte(CP_UTF8, 0, wn.c_str(), -1, nullptr, 0, nullptr, nullptr);
+              if (sz > 0) { n.resize(sz - 1); WideCharToMultiByte(CP_UTF8, 0, wn.c_str(), -1, &n[0], sz, nullptr, nullptr); } }
+#else
+            n.assign(wn.begin(), wn.end());
+#endif
             ImGui::Text("%s", n.c_str());
             if (!locked) {
                 ImGui::SameLine(340);
@@ -905,7 +948,14 @@ void DrawAdultBlockTab() {
                 if (cards[i].state == &cbSafeSearch) { 
                     ToggleSafeSearchViaBat(cbSafeSearch); 
 #ifdef _WIN32
-                    if(!cbSafeSearch){ int r=MessageBoxA(NULL,"Close browsers to apply changes?","RasFocus",MB_YESNO|MB_ICONQUESTION); if(r==IDYES){ system("taskkill /F /IM chrome.exe /T >nul 2>&1"); system("taskkill /F /IM msedge.exe /T >nul 2>&1"); system("taskkill /F /IM brave.exe /T >nul 2>&1"); } }
+                    if(!cbSafeSearch){ int r=MessageBoxA(NULL,"Close browsers to apply changes?","RasFocus",MB_YESNO|MB_ICONQUESTION); if(r==IDYES){ // Use ShellExecuteA instead of system() to avoid C4996 deprecation warning
+                        auto _kill = [](const char* exe){
+                            char cmd[128]; snprintf(cmd, sizeof(cmd), "/c taskkill /F /IM %s /T >nul 2>&1", exe);
+                            SHELLEXECUTEINFOA _si{}; _si.cbSize=sizeof(_si);
+                            _si.lpFile="cmd.exe"; _si.lpParameters=cmd; _si.nShow=SW_HIDE;
+                            ShellExecuteExA(&_si);
+                        };
+                        _kill("chrome.exe"); _kill("msedge.exe"); _kill("brave.exe"); } }
 #endif
                 }
                 SaveStrictSettings();
@@ -953,7 +1003,7 @@ void DrawAdultBlockTab() {
     ImGui::TextDisabled("Cannot be undone.");
     if (cb24HourLock) {
         uint64_t left = lock24hEndTime > GetSystemTimeMs() ? lock24hEndTime - GetSystemTimeMs() : 0;
-        char rem[64]; snprintf(rem, sizeof(rem), "%lluh %llum left", left/3600000, (left%3600000)/60000);
+        char rem[64]; snprintf(rem, sizeof(rem), "%" PRIu64 "h %" PRIu64 "m left", left/3600000, (left%3600000)/60000);
         ImGui::TextColored(ClrTeal, "%s", rem);
     }
     ImGui::EndChild();
