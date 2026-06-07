@@ -35,11 +35,22 @@ if(WIN32)
     # Windows entry point — also defines the extern globals from tab_adult.h
     file(WRITE "${STUB_MAIN}" [[
 #include <windows.h>
+
+// ─── Premium feature gates (required by tab_adult.cpp) ───────
+bool g_isPremiumUser = false;
+bool g_showUpgradePopup = false;
+bool g_parentForceAdultBlock = false;
+
 int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) { return 0; }
 ]])
 else()
     # Standard entry point for Linux/Mac — also defines the extern globals from tab_adult.h
     file(WRITE "${STUB_MAIN}" [[
+// ─── Premium feature gates (required by tab_adult.cpp) ───────
+bool g_isPremiumUser = false;
+bool g_showUpgradePopup = false;
+bool g_parentForceAdultBlock = false;
+
 int main(int argc, char** argv) { return 0; }
 ]])
 endif()
