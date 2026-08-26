@@ -15,13 +15,15 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(imgui)
 
-# ── ImGui static library ───────────────────────────────────────
+# ── ImGui static library (core + Win32/DX11 backends) ─────────
 add_library(imgui_lib STATIC
     ${imgui_SOURCE_DIR}/imgui.cpp
     ${imgui_SOURCE_DIR}/imgui_demo.cpp
     ${imgui_SOURCE_DIR}/imgui_draw.cpp
     ${imgui_SOURCE_DIR}/imgui_tables.cpp
     ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_win32.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_dx11.cpp
 )
 
 target_include_directories(imgui_lib PUBLIC
@@ -29,40 +31,16 @@ target_include_directories(imgui_lib PUBLIC
     ${imgui_SOURCE_DIR}/backends
 )
 
-# ── Minimal Cross-Platform stub ────────────────────────────────
-set(STUB_MAIN "${CMAKE_CURRENT_BINARY_DIR}/stub_main.cpp")
-if(WIN32)
-    # Windows entry point — also defines the extern globals from tab_adult.h
-    file(WRITE "${STUB_MAIN}" [[
-#include <windows.h>
+# ── RasFocus sources ───────────────────────────────────────────
+set(RASFOCUS_SOURCES
+    main.cpp
+    tab_adult.cpp
+    tab_settings.cpp
+    tab_schedule.cpp
+    tab_family_link.cpp
+)
 
-// ─── Premium feature gates (required by tab_adult.cpp) ───────
-bool g_isPremiumUser = false;
-bool g_showUpgradePopup = false;
-bool g_parentForceAdultBlock = false;
-
-int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) { return 0; }
-]])
-else()
-    # Standard entry point for Linux/Mac — also defines the extern globals from tab_adult.h
-    file(WRITE "${STUB_MAIN}" [[
-// ─── Premium feature gates (required by tab_adult.cpp) ───────
-bool g_isPremiumUser = false;
-bool g_showUpgradePopup = false;
-bool g_parentForceAdultBlock = false;
-
-int main(int argc, char** argv) { return 0; }
-]])
-endif()
-
-# ── RasFocus executable ────────────────────────────────────────
-if(WIN32)
-    add_executable(RasFocus WIN32 tab_adult.cpp "${STUB_MAIN}")
-elseif(APPLE)
-    add_executable(RasFocus MACOSX_BUNDLE tab_adult.cpp "${STUB_MAIN}")
-else()
-    add_executable(RasFocus tab_adult.cpp "${STUB_MAIN}")
-endif()
+add_executable(RasFocus WIN32 ${RASFOCUS_SOURCES})
 
 target_include_directories(RasFocus PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -70,38 +48,26 @@ target_include_directories(RasFocus PRIVATE
     ${imgui_SOURCE_DIR}/backends
 )
 
-# ── Platform Specific Libraries & Flags ────────────────────────
-if(WIN32)
-    target_link_libraries(RasFocus PRIVATE
-        imgui_lib
-        gdi32 shell32 shlwapi ole32 oleaut32 psapi uiautomationcore
+# ── Link libraries ─────────────────────────────────────────────
+target_link_libraries(RasFocus PRIVATE
+    imgui_lib
+    d3d11
+    dxgi
+    gdi32
+    shell32
+    shlwapi
+    ole32
+    oleaut32
+    psapi
+    uiautomationcore
+)
+
+# ── MSVC flags ─────────────────────────────────────────────────
+if(MSVC)
+    target_compile_options(RasFocus PRIVATE
+        /W3 /WX- /utf-8 /MP
     )
-    if(MSVC)
-        target_compile_options(RasFocus PRIVATE
-            /W3 /WX- /utf-8 /MP
-        )
-        target_compile_definitions(RasFocus PRIVATE
-            UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX
-        )
-    endif()
-    
-elseif(APPLE)
-    # macOS specific frameworks
-    find_library(COCOA_LIBRARY Cocoa)
-    find_library(OPENGL_LIBRARY OpenGL)
-    find_library(IOKIT_LIBRARY IOKit)
-    find_library(COREVIDEO_LIBRARY CoreVideo)
-    target_link_libraries(RasFocus PRIVATE 
-        imgui_lib 
-        ${COCOA_LIBRARY} ${OPENGL_LIBRARY} ${IOKIT_LIBRARY} ${COREVIDEO_LIBRARY}
-    )
-    
-else()
-    # Linux specific libraries
-    find_package(OpenGL REQUIRED)
-    find_package(Threads REQUIRED)
-    target_link_libraries(RasFocus PRIVATE 
-        imgui_lib 
-        OpenGL::GL Threads::Threads dl X11
+    target_compile_definitions(RasFocus PRIVATE
+        UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX
     )
 endif()
